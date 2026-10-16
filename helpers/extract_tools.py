@@ -25,6 +25,9 @@ def extract_tool_request(content: str) -> dict[str, Any] | None:
         return None
 
     content = content.strip()
+    if not (content.startswith("{") and content.endswith("}")):
+        return None
+
     root = extract_json_root_string(content)
     if root != content:
         return None
@@ -38,6 +41,15 @@ def is_misformatted_tool_request(content: str) -> bool:
         return False
 
     content = content.strip()
+    roots = extract_json_root_strings(content)
+    if (
+        len(roots) > 1
+        and content.startswith("{")
+        and content.endswith("}")
+        and any(extract_tool_request(root) is not None for root in roots)
+    ):
+        return True
+
     for fenced_content in re.findall(
         r"```(?:json)?\s*(.*?)```", content, flags=re.IGNORECASE | re.DOTALL
     ):

@@ -5,7 +5,15 @@
 
 <div x-data>
 <template x-if="$store.modelConfig">
-<div x-data="{ showDropdown: false, showProfileDropdown: false }"
+<div class="model-switcher-root" x-data="{
+       showDropdown: false, showProfileDropdown: false, dropdownMaxHeight: 550,
+       resizeDropdowns() {
+         this.dropdownMaxHeight = Math.max(0, this.$el.getBoundingClientRect().top - 6 - 8);
+       }
+     }"
+     :style="{ '--switcher-available-height': dropdownMaxHeight + 'px' }"
+     x-effect="if (showDropdown || showProfileDropdown) resizeDropdowns()"
+     @resize.window="resizeDropdowns()"
      x-init="
        await Promise.all([
          $store.modelConfig.refreshSwitcher($store.chats?.selected || ''),
@@ -15,16 +23,16 @@
      ">
   <template x-if="($store.modelConfig.switcherAllowed && !$store.modelConfig.switcherLoading) || $store.chats?.selectedContext?.agent_profile">
     <div class="model-switcher-container">
-      <div class="model-context-strip">
+      <div class="model-context-strip" x-overflow>
         <template x-if="$store.modelConfig.switcherAllowed && !$store.modelConfig.switcherLoading">
           <div class="model-switcher-anchor" @click.outside="showDropdown = false">
             <button class="btn-icon-action model-switcher-btn"
                     :class="{ 'has-override': !!$store.modelConfig.switcherOverride }"
                     @click="showDropdown = !showDropdown; showProfileDropdown = false">
-              <span class="material-symbols-outlined" style="font-size: 16px;">neurology</span>
+              <x-icon style="font-size: 16px;" name="neurology"></x-icon>
               <span class="model-switcher-label" x-text="$store.modelConfig.getSwitcherLabel()"></span>
-              <span class="material-symbols-outlined" style="font-size: 0.7rem;"
-                    x-text="showDropdown ? 'expand_less' : 'expand_more'"></span>
+              <x-icon style="font-size: 0.7rem;"
+                    :name="showDropdown ? 'expand_less' : 'expand_more'"></x-icon>
             </button>
             <!-- Dropdown (opens upward) -->
             <div class="model-switcher-dropdown" x-show="showDropdown" x-transition.opacity style="display: none;">
@@ -34,7 +42,7 @@
                   $store.modelConfig.clearOverrideSwitch($store.chats?.selected || '');
                   showDropdown = false;
                 ">
-                  <span class="material-symbols-outlined" style="font-size: 15px;">undo</span>
+                  <x-icon style="font-size: 15px;" name="undo"></x-icon>
                   <span>Use scoped preset</span>
                 </div>
               </template>
@@ -62,6 +70,16 @@
                           <span x-text="preset.chat.provider" style="opacity:0.5;"></span>
                           <span style="opacity:0.3; margin:0 3px;">/</span>
                           <span x-text="preset.chat.name"></span>
+                        </span>
+                      </div>
+                    </template>
+                    <template x-if="preset.vision?.name && (!preset.chat?.vision || preset.vision?.override_main)">
+                      <div class="model-switcher-model-row">
+                        <span class="model-switcher-model-label">Vision</span>
+                        <span class="model-switcher-model-value">
+                          <span x-text="preset.vision.provider" style="opacity:0.5;"></span>
+                          <span style="opacity:0.3; margin:0 3px;">/</span>
+                          <span x-text="preset.vision.name"></span>
                         </span>
                       </div>
                     </template>
@@ -98,7 +116,7 @@
                 );
                 showDropdown = false;
               ">
-                <span class="material-symbols-outlined" style="font-size: 14px;">tune</span>
+                <x-icon style="font-size: 14px;" name="tune"></x-icon>
                 <span>Edit Presets</span>
               </div>
             </div>
@@ -110,57 +128,75 @@
             <button class="btn-icon-action agent-profile-btn"
                     title="Active agent profile"
                     @click="showProfileDropdown = !showProfileDropdown; showDropdown = false">
-              <span class="material-symbols-outlined" style="font-size: 15px;">assignment_ind</span>
+              <span class="agent-profile-avatar" aria-hidden="true" data-overflow-icon
+                    :style="`background:${$store.modelConfig.getAgentProfileVisual($store.chats.selectedContext.agent_profile, $store.chats.selectedContext.agent_profile_label).color}`">
+                <img x-show="$store.modelConfig.getAgentProfileVisual($store.chats.selectedContext.agent_profile, $store.chats.selectedContext.agent_profile_label).url"
+                     :src="$store.modelConfig.getAgentProfileVisual($store.chats.selectedContext.agent_profile, $store.chats.selectedContext.agent_profile_label).url"
+                     alt="">
+                <span x-show="!$store.modelConfig.getAgentProfileVisual($store.chats.selectedContext.agent_profile, $store.chats.selectedContext.agent_profile_label).url"
+                      x-text="$store.modelConfig.getAgentProfileVisual($store.chats.selectedContext.agent_profile, $store.chats.selectedContext.agent_profile_label).initials"></span>
+              </span>
               <span class="agent-profile-label"
                     x-text="$store.chats.selectedContext.agent_profile_label || $store.chats.selectedContext.agent_profile"></span>
-              <span class="material-symbols-outlined" style="font-size: 0.7rem;"
-                    x-text="showProfileDropdown ? 'expand_less' : 'expand_more'"></span>
+              <x-icon style="font-size: 0.7rem;"
+                    :name="showProfileDropdown ? 'expand_less' : 'expand_more'"></x-icon>
             </button>
 
             <div class="agent-profile-dropdown" x-show="showProfileDropdown" x-transition.opacity style="display: none;">
-              <button class="model-switcher-item agent-profile-create" @click="
-                $store.modelConfig.createAgentProfileChat($store.chats?.selected || '')
-                  .then(ok => { if (ok) showProfileDropdown = false; });
-              ">
-                <span class="material-symbols-outlined" style="font-size: 15px;">add</span>
-                <span>Create new Agent Profile</span>
-              </button>
-
-              <div class="model-switcher-divider" style="opacity:0.2;"></div>
-
               <template x-if="$store.modelConfig.agentProfilesLoading">
                 <div class="model-switcher-item disabled">Loading profiles...</div>
               </template>
 
               <template x-for="profile in $store.modelConfig.getAgentProfileList($store.chats.selectedContext.agent_profile, $store.chats.selectedContext.agent_profile_label)" :key="profile.key">
-                <div class="model-switcher-item agent-profile-item"
-                     :class="{
-                       'active': profile.key === $store.chats.selectedContext.agent_profile,
-                       'disabled': $store.chats.selectedContext.running || $store.modelConfig.agentProfileSaving
-                     }"
-                     @click="
-                       if (profile.key === $store.chats.selectedContext.agent_profile) {
+                <div class="agent-profile-row"
+                     x-show="!$store.modelConfig.agentProfilesLoading"
+                     :class="{ 'active': profile.key === $store.chats.selectedContext.agent_profile }">
+                  <button type="button" class="model-switcher-item agent-profile-item"
+                       :disabled="$store.chats.selectedContext.running || $store.modelConfig.agentProfileSaving"
+                       :class="{ 'disabled': $store.chats.selectedContext.running || $store.modelConfig.agentProfileSaving }"
+                       @click="
+                         if (profile.key === $store.chats.selectedContext.agent_profile) {
+                           showProfileDropdown = false;
+                         } else {
+                           $store.modelConfig.selectAgentProfile($store.chats?.selected || '', profile.key)
+                             .then(ok => { if (ok) showProfileDropdown = false; });
+                         }
+                       ">
+                    <span class="agent-profile-avatar" :style="`background:${$store.modelConfig.getAgentProfileVisual(profile.key, profile.label).color}`">
+                      <img x-show="$store.modelConfig.getAgentProfileVisual(profile.key, profile.label).url" :src="$store.modelConfig.getAgentProfileVisual(profile.key, profile.label).url" alt="">
+                      <span x-show="!$store.modelConfig.getAgentProfileVisual(profile.key, profile.label).url" x-text="$store.modelConfig.getAgentProfileVisual(profile.key, profile.label).initials"></span>
+                    </span>
+                    <div class="model-switcher-preset-name" x-text="profile.label || profile.key"></div>
+                  </button>
+                  <button type="button" class="agent-profile-row-edit"
+                       :aria-label="`Edit ${profile.label || profile.key}`"
+                       @click="
                          showProfileDropdown = false;
-                       } else {
-                         $store.modelConfig.selectAgentProfile($store.chats?.selected || '', profile.key)
-                           .then(ok => { if (ok) showProfileDropdown = false; });
-                       }
-                     ">
-                  <div class="model-switcher-preset-name" x-text="profile.label || profile.key"></div>
+                         window.openAgentEditor?.({
+                           view: 'edit',
+                           profileId: profile.key,
+                           contextId: $store.chats?.selected || ''
+                         });
+                       ">
+                    <x-icon name="edit"></x-icon>
+                    <span>Edit</span>
+                  </button>
                 </div>
               </template>
 
               <div class="model-switcher-divider" style="opacity:0.2;"></div>
               <button class="model-switcher-item agent-profile-settings" @click="
-                openModal('settings/settings.html');
                 showProfileDropdown = false;
+                window.openAgentEditor?.({ view: 'manage', contextId: $store.chats?.selected || '' });
               ">
-                <span class="material-symbols-outlined" style="font-size: 14px;">settings</span>
-                <span>Agent Config</span>
+                <x-icon style="font-size: 14px;" name="manage_accounts"></x-icon>
+                <span>Manage agents</span>
               </button>
             </div>
           </div>
         </template>
+
+        <x-extension id="model-context-strip-end"></x-extension>
       </div>
     </div>
   </template>
@@ -169,16 +205,44 @@
 </div>
 
 <style>
+  .model-switcher-root {
+    flex: 1;
+    min-width: 0;
+  }
   .model-switcher-container {
     position: relative;
     z-index: 10;
   }
   .model-context-strip {
     display: flex;
+    width: fit-content;
+    max-width: 100%;
     align-items: center;
     gap: 8px;
     min-width: 0;
     flex-wrap: wrap;
+  }
+  .model-context-strip > x-extension,
+  .model-context-strip > x-extension > x-component,
+  .model-context-strip > x-extension > x-component > div[x-data] {
+    display: contents;
+  }
+  .agent-profile-avatar {
+    width: 1.35rem;
+    height: 1.35rem;
+    display: inline-grid;
+    place-items: center;
+    flex: 0 0 auto;
+    overflow: hidden;
+    border-radius: 50%;
+    color: #fff;
+    font-size: .58rem;
+    font-weight: 700;
+  }
+  .agent-profile-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
   }
   .model-switcher-anchor {
     position: relative;
@@ -236,7 +300,7 @@
     bottom: calc(100% + 6px);
     left: 0;
     min-width: 280px;
-    max-height: 550px;
+    max-height: min(550px, var(--switcher-available-height, 550px));
     overflow-y: auto;
     background-color: var(--color-panel);
     border: 1px solid var(--color-border);
@@ -251,7 +315,7 @@
     left: 0;
     min-width: 260px;
     max-width: min(320px, 90vw);
-    max-height: 550px;
+    max-height: min(550px, var(--switcher-available-height, 550px));
     overflow-y: auto;
     background-color: var(--color-panel);
     border: 1px solid var(--color-border);
@@ -259,6 +323,10 @@
     padding: 6px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
     z-index: 100;
+  }
+  .overflow-hidden .model-switcher-dropdown,
+  .overflow-hidden .agent-profile-dropdown {
+    max-height: 550px;
   }
   .model-switcher-item {
     padding: 6px 10px;
@@ -272,6 +340,57 @@
   }
   .model-switcher-item.active {
     background: color-mix(in srgb, var(--color-highlight) 12%, transparent);
+  }
+  .agent-profile-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    border-radius: 6px;
+    transition: background 0.1s ease;
+  }
+  .agent-profile-row:hover {
+    background: var(--color-background-hover, rgba(255,255,255,0.06));
+  }
+  .agent-profile-row.active {
+    background: color-mix(in srgb, var(--color-highlight) 12%, transparent);
+  }
+  .agent-profile-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    width: 100%;
+    min-width: 0;
+    border: 0;
+    background: transparent;
+    color: var(--color-text);
+    text-align: left;
+  }
+  .agent-profile-row .agent-profile-item:hover {
+    background: transparent;
+  }
+  .agent-profile-row-edit {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-right: 4px;
+    min-height: 24px;
+    padding: 4px 6px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--color-text);
+    font: inherit;
+    font-size: 0.72rem;
+    cursor: pointer;
+    opacity: 0.72;
+    white-space: nowrap;
+  }
+  .agent-profile-row-edit:hover {
+    background: color-mix(in srgb, var(--color-text) 8%, transparent);
+    opacity: 1;
+  }
+  .agent-profile-row-edit x-icon {
+    font-size: 0.8rem;
   }
   .model-switcher-item.revert {
     display: flex;
@@ -339,17 +458,6 @@
     opacity: 0.7;
     text-align: left;
     font-family: inherit;
-  }
-  .agent-profile-create {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    width: 100%;
-    border: none;
-    background: transparent;
-    color: var(--color-text);
-    font-family: inherit;
-    font-weight: 500;
   }
 
   @media (max-width: 600px) {

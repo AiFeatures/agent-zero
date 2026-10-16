@@ -8,13 +8,16 @@
 ## Ownership
 
 - Each direct profile directory owns its `agent.yaml`, optional `prompts/`, optional `tools/`, and optional `extensions/`.
-- `_example/` demonstrates profile layout and should stay suitable as a reference.
+- `_example/` demonstrates profile layout, is not selectable, and should stay
+  suitable as a reference.
 - User-created local profiles belong under `usr/agents/`, not here, unless they are intended to ship with the product.
 
 ## Local Contracts
 
 - `agent.yaml` is the profile entry point and must stay valid YAML.
 - Profile prompt overrides should be narrow and named to match the core prompt they extend or replace.
+- Profile main prompts must not advertise configurable capabilities; put such
+  guidance in policy-filtered profile tool prompts.
 - Profile-local tools must follow the same `Tool` contract as root `tools/`.
 - Do not put secrets, provider API keys, local paths, or user-specific settings in bundled profiles.
 

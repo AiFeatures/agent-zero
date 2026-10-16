@@ -90,6 +90,10 @@ Many Browser steps also keep a small history screenshot. That means an older
 chat can show the page as it looked when the agent worked on it, not just the
 latest page frame.
 
+Reading page content, listing tabs, inspecting state or elements, and running
+JavaScript skip automatic history screenshots to keep these tasks quick.
+Ask for a screenshot when you need a visual record.
+
 ## Annotate Pages
 
 Annotate mode lets you mark a page element or region and send a targeted comment back into the chat. This is useful for UI review: you can point at the exact thing that needs to change instead of describing it from memory.
@@ -119,6 +123,7 @@ The toolbar menu includes:
 The full settings include:
 
 - **Browser location:** Use the Docker browser or **Bring Your Own Browser** through A0 CLI.
+- **Proxy:** Optionally route the Docker browser through an HTTP or SOCKS proxy, with bypass and authentication settings.
 - **Page content access:** Controls host-browser page text and screenshots.
 - **Starting page:** The default URL for new Browser sessions.
 - **Autofocus active page:** Lets an already-open Browser surface follow the agent's browsing.
@@ -134,6 +139,11 @@ can show in the Canvas.
 
 In normal Docker installs, the needed browser is already included. In local
 development, Agent Zero can install it the first time it is needed.
+
+To use a proxy, enter its server in Browser settings, for example
+`http://proxy.example:3128` or `socks5://proxy.example:1080`. Add an optional
+comma-separated bypass list, username, and password when the proxy requires
+them. Saving proxy changes restarts active Docker Browser sessions.
 
 ## Bring Your Own Browser
 
@@ -228,7 +238,7 @@ See [MCP Setup](mcp-setup.md) for MCP setup.
 
 ## Troubleshooting
 
-- **Browser says Playwright is missing:** Docker installs already include the browser. In local development, let Agent Zero install it on first use or preinstall it with `PLAYWRIGHT_BROWSERS_PATH=tmp/playwright playwright install chromium`.
+- **Browser says Chromium is missing:** Docker installs already include the browser. In local development, let Agent Zero install it on first use or preinstall it with `PLAYWRIGHT_BROWSERS_PATH=tmp/playwright patchright install chromium --no-shell`.
 - **The Browser surface does not open automatically:** That is expected. Open the Browser surface manually or ask the agent to show it.
 - **The Canvas does not follow the agent:** Enable **Autofocus active page** in Browser settings.
 - **Bring Your Own Browser cannot start:** Keep A0 CLI connected, verify Browser location is **Bring Your Own Browser**, and check `/browser status` in A0 CLI.

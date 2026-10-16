@@ -10,11 +10,14 @@ from typing import Any
 from helpers import files
 from helpers.print_style import PrintStyle
 from helpers.tool import Response, Tool
+from plugins._browser.helpers.config import activate_browser_model
 from plugins._browser.helpers.selector import get_tool_runtime
 
 
 HISTORY_SCREENSHOT_QUALITY = 62
-HISTORY_SCREENSHOT_ACTION_DENYLIST = {"close", "close_all"}
+HISTORY_SCREENSHOT_ACTION_DENYLIST = {
+    "close", "close_all", "list", "state", "content", "detail", "evaluate",
+}
 
 
 async def get_runtime(context_id: str, create: bool = True, agent: Any | None = None):
@@ -75,6 +78,15 @@ class Browser(Tool):
         else:
             action = str(action or self.method or "state").strip().lower().replace("-", "_")
         try:
+            activate_browser_model(self.agent)
+        except Exception as exc:
+            PrintStyle.warning(f"Browser model preset could not be activated: {exc}")
+        try:
+            if action == "evaluate" and (not isinstance(script, str) or not script.strip()):
+                return Response(
+                    message="Browser evaluate failed: evaluate requires a non-empty 'script' string",
+                    break_loop=False,
+                )
             runtime = await get_runtime(self.agent.context.id, agent=self.agent)
         except Exception as exc:
             return Response(message=f"Browser runtime unavailable: {exc}", break_loop=False)
@@ -305,7 +317,7 @@ class Browser(Tool):
                     message=f"Unknown browser action: {action}",
                     break_loop=False,
                 )
-            await self._record_history_screenshot(runtime, action, result, browser_id)
+            await self._record_history_screenshot(runtime, action, result, browser_id, calls=calls)
         except Exception as exc:
             return Response(message=f"Browser {action} failed: {exc}", break_loop=False)
 
@@ -419,10 +431,18 @@ class Browser(Tool):
         action: str,
         result: Any,
         requested_browser_id: int | str | None = None,
+        *,
+        calls: list[dict[str, Any]] | None = None,
     ) -> None:
         if not getattr(self, "log", None):
             return
         if action in HISTORY_SCREENSHOT_ACTION_DENYLIST:
+            return
+        if action == "multi" and calls and all(
+            str(call.get("action") or "").strip().lower().replace("-", "_")
+            in HISTORY_SCREENSHOT_ACTION_DENYLIST
+            for call in calls
+        ):
             return
 
         screenshot = result if action == "screenshot" and isinstance(result, dict) else None
@@ -561,6 +581,6 @@ class Browser(Tool):
         if action == "content" and isinstance(result, dict):
             if set(result.keys()) == {"document"}:
                 return str(result.get("document") or "")
-            return json.dumps(result, indent=2, ensure_ascii=False)
+            return json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
-        return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+        return json.dumps(result, ensure_ascii=False, separators=(",", ":"), default=str)

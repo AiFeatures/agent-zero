@@ -1,5 +1,7 @@
 // Message Action Buttons - DOM helpers for message action buttons
 
+import { ICON_SELECTOR, setIconName } from "/js/icons.js";
+
 const ACTION_ICON_MAP = {
   detail: "open_in_full",
   speak: "volume_up",
@@ -45,16 +47,40 @@ export async function copyToClipboard(text) {
  * Show visual feedback on a button (success/error state)
  */
 export function showButtonFeedback(button, success, originalIcon) {
-  const icon = button.querySelector(".material-symbols-outlined");
+  const icon = button.querySelector(ICON_SELECTOR);
   if (!icon) return;
   
-  icon.textContent = success ? "check" : "error";
+  setIconName(icon, success ? "check" : "error");
   button.classList.add(success ? "success" : "error");
   
   setTimeout(() => {
-    icon.textContent = originalIcon;
+    setIconName(icon, originalIcon);
     button.classList.remove("success", "error");
   }, 1000);
+}
+
+export function syncActionButtons(container, actionButtons = []) {
+  const previous = container.__managedActionButtons || [];
+  const next = actionButtons.filter(Boolean).map((button, index) => {
+    const existing = previous[index];
+    if (
+      existing?.isConnected &&
+      existing.dataset.actionKey === button.dataset.actionKey
+    ) {
+      existing.__actionHandler = button.__actionHandler;
+      return existing;
+    }
+    existing?.remove();
+    return button;
+  });
+  const anchor = [...container.children].find(
+    (child) =>
+      !previous.includes(child) && !child.classList.contains("expand-btn"),
+  );
+
+  previous.slice(next.length).forEach((button) => button.remove());
+  next.forEach((button) => container.insertBefore(button, anchor || null));
+  container.__managedActionButtons = next;
 }
 
 /**
@@ -71,6 +97,8 @@ export function createActionButton(icon, text = "", handler = null) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = `action-button action-${icon}`;
+  button.dataset.actionKey = `${icon}:${text}`;
+  button.__actionHandler = handler;
   const label = buildActionLabel(icon, text);
   if (label) {
     button.setAttribute("aria-label", label);
@@ -78,28 +106,29 @@ export function createActionButton(icon, text = "", handler = null) {
   }
 
   if (iconName) {
-    button.innerHTML = `<span class="material-symbols-outlined">${iconName}</span>`;
+    const iconElement = document.createElement("x-icon");
+    iconElement.name = iconName;
+    button.appendChild(iconElement);
   } else if (text) {
     button.textContent = text;
   }
 
-  if (typeof handler === "function") {
-    button.addEventListener("click", async (event) => {
-      event.stopPropagation();
-      const shouldShowFeedback = Boolean(iconName); // icon === "copy" || icon === "speak";
-      try {
-        await handler();
-        if (shouldShowFeedback) {
-          showButtonFeedback(button, true, iconName);
-        }
-      } catch (err) {
-        console.error("Action button failed:", err);
-        if (shouldShowFeedback) {
-          showButtonFeedback(button, false, iconName);
-        }
+  button.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    if (typeof button.__actionHandler !== "function") return;
+    const shouldShowFeedback = Boolean(iconName); // icon === "copy" || icon === "speak";
+    try {
+      await button.__actionHandler();
+      if (shouldShowFeedback) {
+        showButtonFeedback(button, true, iconName);
       }
-    });
-  }
+    } catch (err) {
+      console.error("Action button failed:", err);
+      if (shouldShowFeedback) {
+        showButtonFeedback(button, false, iconName);
+      }
+    }
+  });
 
   return button;
 }

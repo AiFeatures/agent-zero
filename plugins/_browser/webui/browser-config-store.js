@@ -1,8 +1,20 @@
 import { createStore } from "/js/AlpineStore.js";
 import { callJsonApi } from "/js/api.js";
 import { showConfirmDialog } from "/js/confirmDialog.js";
+import { store as notificationStore } from "/components/notifications/notification-store.js";
 
+const BROWSER_PAGES = {
+  history: "chrome://history/",
+  clearData: "chrome://settings/clearBrowserData",
+  passwords: "chrome://password-manager/passwords",
+  addresses: "chrome://settings/addresses",
+  extensions: "chrome://extensions/",
+  downloadSettings: "chrome://settings/downloads",
+  downloads: "chrome://downloads/",
+};
+const EXTENSIONS_ROOT = "/a0/usr/_browser/extensions";
 const BROWSER_EXTENSIONS_API = "/plugins/_browser/extensions";
+const BROWSER_SETUP_API = "/plugins/_browser/host_browser_setup";
 const BROWSER_STATUS_API = "/plugins/_browser/status";
 const RUNTIME_BACKENDS = new Set(["container", "host_required"]);
 const BROWSER_TAB_SCOPES = new Set(["per_context", "shared"]);
@@ -34,9 +46,17 @@ function ensureConfig(config) {
   config.extension_paths = normalizePathList(config.extension_paths);
   config.default_homepage = String(config.default_homepage || "about:blank").trim() || "about:blank";
   config.autofocus_active_page = normalizeBoolean(config.autofocus_active_page, true);
+  config.annotation_screenshots = normalizeBoolean(config.annotation_screenshots, false);
   config.browser_tab_scope = normalizeChoice(config.browser_tab_scope, BROWSER_TAB_SCOPES, "per_context");
   config.max_open_tabs = normalizeInt(config.max_open_tabs, DEFAULT_MAX_OPEN_TABS, MIN_MAX_OPEN_TABS, HARD_MAX_OPEN_TABS);
+  config.evaluate_timeout_seconds ??= 30;
   config.runtime_backend = normalizeRuntimeBackend(config.runtime_backend);
+  config.proxy_server = String(config.proxy_server || "").trim();
+  config.proxy_bypass = String(config.proxy_bypass || "").trim();
+  config.proxy_username = String(config.proxy_username || "");
+  config.proxy_password = String(config.proxy_password || "");
+  config.keyboard_layout = normalizeXkbToken(config.keyboard_layout);
+  config.keyboard_variant = normalizeXkbToken(config.keyboard_variant);
   config.host_browser_privacy_policy = normalizeChoice(
     config.host_browser_privacy_policy,
     HOST_PRIVACY_POLICIES,
@@ -62,6 +82,14 @@ function normalizeInt(value, fallback, minimum, maximum) {
   const number = Number.parseInt(value, 10);
   if (!Number.isFinite(number)) return fallback;
   return Math.max(minimum, Math.min(maximum, number));
+}
+
+function normalizeXkbToken(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "")
+    .slice(0, 32);
 }
 
 function normalizeRuntimeBackend(value) {
@@ -101,6 +129,24 @@ function isCustomHostBrowserEndpoint(value) {
   return Boolean(normalizeCustomHostBrowserEndpoint(value));
 }
 
+function stableHostBrowserSelection(value, status) {
+  const selection = normalizeHostBrowserSelection(value);
+  if (!selection) return "";
+  const connectors = Array.isArray(status?.connectors) ? status.connectors : [];
+  for (const connector of connectors) {
+    const candidates = [
+      ...(Array.isArray(connector?.available_browsers) ? connector.available_browsers : []),
+      connector,
+    ];
+    for (const candidate of candidates) {
+      const endpoint = normalizeCustomHostBrowserEndpoint(candidate?.cdp_endpoint);
+      const browserId = normalizeHostBrowserSelection(candidate?.id || candidate?.browser_id);
+      if (endpoint && endpoint === selection && browserId) return browserId;
+    }
+  }
+  return selection;
+}
+
 function normalizeBoolean(value, fallback = true) {
   if (value === undefined || value === null || value === "") return fallback;
   if (typeof value === "boolean") return value;
@@ -123,6 +169,7 @@ function hostBrowserFamilyLabel(value) {
     "edge-dev": "Edge Dev",
     brave: "Brave",
     opera: "Opera",
+    safari: "Safari",
     vivaldi: "Vivaldi",
   };
   const label = labels[base] || "Host browser";
@@ -144,12 +191,15 @@ export const store = createStore("browserConfig", {
   config: null,
   extensionsList: [],
   extensionsLoading: false,
-  extensionsError: "",
-  extensionsMessage: "",
+  extensionInstallUrl: "",
+  extensionActionLoading: false,
+  extensionsRoot: "",
+  openingBrowserPage: "",
   extensionDeleteLoadingPath: "",
   hostBrowserStatus: null,
   hostBrowserStatusLoading: false,
   hostBrowserStatusRefreshTimer: null,
+  hostBrowserSetupOpening: "",
   hostBrowserCustomEndpoint: "",
   hostBrowserCustomMode: false,
 
@@ -163,11 +213,12 @@ export const store = createStore("browserConfig", {
     this.stopHostBrowserStatusRefresh();
     this.config = null;
     this.extensionsList = [];
-    this.extensionsError = "";
-    this.extensionsMessage = "";
+    this.extensionInstallUrl = "";
+    this.openingBrowserPage = "";
     this.extensionDeleteLoadingPath = "";
     this.hostBrowserStatus = null;
     this.hostBrowserStatusLoading = false;
+    this.hostBrowserSetupOpening = "";
     this.hostBrowserCustomEndpoint = "";
     this.hostBrowserCustomMode = false;
   },
@@ -193,6 +244,23 @@ export const store = createStore("browserConfig", {
     this.config = safeConfig;
     if (isCustomHostBrowserEndpoint(safeConfig.host_browser_selection)) {
       this.hostBrowserCustomEndpoint = safeConfig.host_browser_selection;
+    }
+  },
+
+  async openBrowserPage(section) {
+    const url = BROWSER_PAGES[section];
+    if (!url || this.openingBrowserPage) return;
+    this.openingBrowserPage = section;
+    try {
+      const { store: browser } = await import("/plugins/_browser/webui/browser-store.js");
+      const { store: canvas } = await import("/components/canvas/right-canvas-store.js");
+      await browser.command("open", { url });
+      if (browser.error) throw new Error(browser.error);
+      await canvas.openModalSurface("browser");
+    } catch (error) {
+      notificationStore.addFrontendToastOnly("error", error instanceof Error ? error.message : String(error));
+    } finally {
+      this.openingBrowserPage = "";
     }
   },
 
@@ -244,21 +312,29 @@ export const store = createStore("browserConfig", {
     const connectors = Array.isArray(this.hostBrowserStatus?.connectors)
       ? this.hostBrowserStatus.connectors
       : [];
-    const options = [{ value: "", label: "Automatic (A0 CLI chooses)" }];
+    const options = [{ value: "", label: "Automatic (first available)" }];
     const seen = new Set([""]);
     for (const connector of connectors) {
       const advertised = Array.isArray(connector?.available_browsers)
         ? connector.available_browsers
         : [];
       for (const browser of advertised) {
-        const value = normalizeCustomHostBrowserEndpoint(browser?.cdp_endpoint || browser?.id);
+        const endpoint = normalizeCustomHostBrowserEndpoint(browser?.cdp_endpoint);
+        const browserId = normalizeHostBrowserSelection(browser?.id || browser?.browser_id);
+        const family = normalizeHostBrowserSelection(browser?.family || browser?.browser_family);
+        const value = endpoint
+          ? browserId || endpoint
+          : family === "safari" ? browserId : "";
         if (!value || seen.has(value)) continue;
         seen.add(value);
         const label = browser?.label || hostBrowserFamilyLabel(browser?.family || value);
         const status = browser?.status ? ` - ${hostBrowserStatusLabel(browser.status)}` : "";
         options.push({ value, label: `${label}${status}` });
       }
-      const fallbackValue = normalizeCustomHostBrowserEndpoint(connector?.cdp_endpoint || connector?.browser_id);
+      const fallbackEndpoint = normalizeCustomHostBrowserEndpoint(connector?.cdp_endpoint);
+      const fallbackValue = fallbackEndpoint
+        ? normalizeHostBrowserSelection(connector?.browser_id) || fallbackEndpoint
+        : "";
       if (fallbackValue && !seen.has(fallbackValue)) {
         seen.add(fallbackValue);
         const label = connector?.browser_label || hostBrowserFamilyLabel(connector?.browser_family || fallbackValue);
@@ -334,11 +410,72 @@ export const store = createStore("browserConfig", {
     try {
       const response = await callJsonApi(BROWSER_STATUS_API, {});
       this.hostBrowserStatus = response?.host_browser || { connectors: [] };
+      const safeConfig = ensureConfig(this.config);
+      if (safeConfig) {
+        const stable = stableHostBrowserSelection(
+          safeConfig.host_browser_selection,
+          this.hostBrowserStatus,
+        );
+        if (stable !== safeConfig.host_browser_selection) {
+          safeConfig.host_browser_selection = stable;
+          this.hostBrowserCustomEndpoint = "";
+          this.hostBrowserCustomMode = false;
+        }
+      }
     } catch (_error) {
       this.hostBrowserStatus = { connectors: [] };
     } finally {
       this.hostBrowserStatusLoading = false;
     }
+  },
+
+  async openHostBrowserSetup(browserFamily) {
+    if (this.hostBrowserSetupOpening) return;
+    const family = String(browserFamily || "").trim().toLowerCase();
+    if (!["chrome", "opera", "edge"].includes(family)) return;
+    this.hostBrowserSetupOpening = family;
+    try {
+      await callJsonApi(BROWSER_SETUP_API, { browser_family: family });
+      const label = family === "edge" ? "Edge" : `${family[0].toUpperCase()}${family.slice(1)}`;
+      notificationStore.addFrontendToastOnly(
+        "success",
+        `${label} remote-debugging setup opened on the connected host.`,
+        "",
+        4,
+      );
+    } catch (error) {
+      console.error("Failed to open host browser setup:", error);
+      notificationStore.addFrontendToastOnly(
+        "error",
+        "Connect or update Launcher or A0 CLI, enable host Browser access, and try again.",
+        "Could not open browser setup",
+        7,
+      );
+    } finally {
+      this.hostBrowserSetupOpening = "";
+    }
+  },
+
+  hostBrowserSetupAvailable(browserFamily) {
+    const family = String(browserFamily || "").trim().toLowerCase();
+    const connectors = Array.isArray(this.hostBrowserStatus?.connectors)
+      ? this.hostBrowserStatus.connectors
+      : [];
+    return connectors.some((connector) => {
+      if (!Array.isArray(connector?.features) || !connector.features.includes("open_remote_debugging")) {
+        return false;
+      }
+      const browsers = Array.isArray(connector?.available_browsers)
+        ? connector.available_browsers
+        : [];
+      return browsers.some((browser) => {
+        const available = String(browser?.family || browser?.browser_family || "")
+          .trim()
+          .toLowerCase()
+          .replace(/-(?:a0|cdp)$/, "");
+        return available === family || (family === "edge" && available === "edge-dev");
+      });
+    });
   },
 
   hostBrowserConnectorLabel() {
@@ -351,18 +488,18 @@ export const store = createStore("browserConfig", {
       return `${hostBrowserFamilyLabel(active.browser_family)}${profile}: ${hostBrowserStatusLabel(active.status)}`;
     }
     const preparable = connectors.find((item) => item?.can_prepare || item?.supported);
-    if (preparable) return "A0 CLI connected - browser will open on first use";
-    if (connectors.length) return "A0 CLI connected - host browser unavailable";
-    return "Connect A0 CLI to use a host browser";
+    if (preparable) return "Host connected - browser will open on first use";
+    if (connectors.length) return "Host connected - host browser unavailable";
+    return "Connect through Launcher or A0 CLI to use a host browser";
   },
 
   browserRuntimeStatusLabel() {
     if (this.config?.runtime_backend !== "host_required") {
-      return "Docker browser runs inside Agent Zero; A0 CLI host-browser status does not affect it.";
+      return "Docker browser runs inside Agent Zero; host-browser connection status does not affect it.";
     }
     const label = this.hostBrowserConnectorLabel();
-    if (label.startsWith("Connect A0 CLI") || label.includes("unavailable")) {
-      return `${label}. Switch Browser location to Internal Docker browser to browse without A0 CLI.`;
+    if (label.startsWith("Connect through Launcher") || label.includes("unavailable")) {
+      return `${label}. Switch Browser location to Internal Docker browser to browse without a host connection.`;
     }
     return label;
   },
@@ -388,7 +525,6 @@ export const store = createStore("browserConfig", {
   async loadExtensionsList() {
     if (this.extensionsLoading) return;
     this.extensionsLoading = true;
-    this.extensionsError = "";
     try {
       const response = await callJsonApi(BROWSER_EXTENSIONS_API, { action: "list" });
       if (!response?.ok) {
@@ -397,17 +533,15 @@ export const store = createStore("browserConfig", {
       this.applyExtensionPayload(response);
     } catch (error) {
       this.extensionsList = [];
-      this.extensionsError = error instanceof Error ? error.message : String(error);
+      notificationStore.addFrontendToastOnly("error", error instanceof Error ? error.message : String(error));
     } finally {
       this.extensionsLoading = false;
     }
   },
 
   applyExtensionPayload(response = {}) {
+    this.extensionsRoot = response.root || EXTENSIONS_ROOT;
     this.extensionsList = Array.isArray(response.extensions) ? response.extensions : [];
-    if (Array.isArray(response.extension_paths) && this.config) {
-      this.config.extension_paths = normalizePathList(response.extension_paths);
-    }
   },
 
   extensionEnabled(extension) {
@@ -430,6 +564,70 @@ export const store = createStore("browserConfig", {
     safeConfig.extension_paths = paths;
   },
 
+  createExtensionWithAgent(context) {
+    this.prefillExtensionPrompt(context,
+      [
+        "Use the browser-extension-control skill to create a new Chrome extension for Agent Zero's Browser.",
+        "Start by asking me for the extension name, purpose, target websites, and required permissions.",
+        `Create it under ${this.extensionsRoot || EXTENSIONS_ROOT}/<extension-slug> and keep permissions minimal.`,
+      ].join("\n")
+    );
+  },
+
+  askAgentInstallExtension(context) {
+    const url = String(this.extensionInstallUrl || "").trim();
+    const prompt = url
+      ? [
+          "Use the browser-extension-control skill to review and optionally install this Chrome Web Store extension for Agent Zero's Browser.",
+          `Chrome Web Store URL or id: ${url}`,
+          "Explain the permissions and any sandbox risk before enabling it.",
+        ].join("\n")
+      : [
+          "Use the browser-extension-control skill to help me install and review a Chrome Web Store extension for Agent Zero's Browser.",
+          "Ask me for the Chrome Web Store URL or extension id first.",
+          "Explain the permissions and any sandbox risk before enabling it.",
+        ].join("\n");
+    this.prefillExtensionPrompt(context, prompt);
+  },
+
+  async installExtensionFromUrl() {
+    if (this.extensionActionLoading) return;
+    const url = String(this.extensionInstallUrl || "").trim();
+    if (!url) {
+      notificationStore.addFrontendToastOnly("info", "Paste a Chrome Web Store URL or extension id first.");
+      return;
+    }
+
+    this.extensionActionLoading = true;
+    notificationStore.addFrontendToastOnly("info", "Installing extension… Large packages may take a few minutes.");
+    try {
+      const response = await callJsonApi("/plugins/_browser/extensions", {
+        action: "install_web_store",
+        url,
+      });
+      if (!response?.ok) {
+        throw new Error(response?.error || "Install failed.");
+      }
+      this.applyExtensionPayload(response);
+      this.setExtensionEnabled(response.path, true);
+      this.extensionInstallUrl = "";
+      notificationStore.addFrontendToastOnly("success", `Installed ${response.name || response.id}.`);
+    } catch (error) {
+      notificationStore.addFrontendToastOnly("error", error instanceof Error ? error.message : String(error));
+    } finally {
+      this.extensionActionLoading = false;
+    }
+  },
+
+  async prefillExtensionPrompt(context, prompt) {
+    if (context?.confirmDiscardUnsavedChanges && !context.confirmDiscardUnsavedChanges()) return;
+    const { store: chat } = await import("/components/chat/input/input-store.js");
+    await globalThis.closeModal?.();
+    chat.message = prompt;
+    chat.adjustTextareaHeight?.();
+    chat.focus?.();
+  },
+
   extensionCanDelete(extension) {
     return Boolean(extension?.can_delete);
   },
@@ -443,10 +641,8 @@ export const store = createStore("browserConfig", {
   async deleteExtension(extension) {
     const path = String(extension?.path || "").trim();
     if (!path) return;
-    this.extensionsError = "";
-    this.extensionsMessage = "";
     if (!this.extensionCanDelete(extension)) {
-      this.extensionsError = "Only Browser-managed extensions can be deleted.";
+      notificationStore.addFrontendToastOnly("error", "Only Browser-managed extensions can be deleted.");
       return;
     }
     const name = String(extension?.name || "this extension").trim();
@@ -469,9 +665,10 @@ export const store = createStore("browserConfig", {
         throw new Error(response?.error || "Could not delete extension.");
       }
       this.applyExtensionPayload(response);
-      this.extensionsMessage = `Deleted ${response.name || name}.`;
+      this.setExtensionEnabled(path, false);
+      notificationStore.addFrontendToastOnly("success", `Deleted ${response.name || name}.`);
     } catch (error) {
-      this.extensionsError = error instanceof Error ? error.message : String(error);
+      notificationStore.addFrontendToastOnly("error", error instanceof Error ? error.message : String(error));
     } finally {
       this.extensionDeleteLoadingPath = "";
     }

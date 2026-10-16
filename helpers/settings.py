@@ -1,4 +1,7 @@
 import base64
+from contextlib import contextmanager
+from contextvars import ContextVar, Token
+from copy import deepcopy
 import hashlib
 import json
 import os
@@ -69,6 +72,10 @@ class Settings(TypedDict):
     workdir_max_lines: int
     workdir_gitignore: str
     file_browser_remember_last_directory: bool
+    file_browser_max_text_size_mb: int
+    file_browser_max_transfer_size_mb: int
+    file_browser_max_extract_size_mb: int
+    file_browser_max_archive_entries: int
 
     api_keys: dict[str, str]
 
@@ -169,12 +176,19 @@ UI_CONTROL_VISIBILITY_DEFAULTS = {
     "projectSelector": {"mobile": True, "desktop": True},
     "time": {"mobile": False, "desktop": True},
     "connectionStatus": {"mobile": True, "desktop": True},
+    "contextWindowUsage": {"mobile": True, "desktop": True},
     "rightCanvasRail": {"mobile": True, "desktop": True},
 }
 
 SETTINGS_FILE = files.get_abs_path("usr/settings.json")
 _settings: Settings | None = None
+_settings_version_cache: ContextVar[dict[str, str] | None] = ContextVar(
+    "settings_version_cache", default=None
+)
 _runtime_settings_snapshot: Settings | None = None
+_prompt_settings_snapshot: ContextVar[Settings | None] = ContextVar(
+    "prompt_settings_snapshot", default=None
+)
 
 OptionT = TypeVar("OptionT", bound=FieldOption)
 
@@ -220,7 +234,12 @@ def _normalize_time_format(value: Any, default: str = TIME_FORMAT_12H) -> str:
 def _normalize_ui_control_visibility(value: Any) -> dict[str, dict[str, bool]]:
     submitted = value if isinstance(value, dict) else {}
     normalized = {}
-    for control, devices in UI_CONTROL_VISIBILITY_DEFAULTS.items():
+    defaults = {
+        **{control: {"mobile": True, "desktop": True} for control in submitted
+           if isinstance(control, str) and control.startswith("canvas:") and len(control) > 7},
+        **UI_CONTROL_VISIBILITY_DEFAULTS,
+    }
+    for control, devices in defaults.items():
         submitted_devices = submitted.get(control, {})
         if not isinstance(submitted_devices, dict):
             submitted_devices = {}
@@ -258,9 +277,13 @@ def convert_out(settings: Settings) -> SettingsOutput:
             chat_providers=get_providers("chat"),
             embedding_providers=get_providers("embedding"),
             is_dockerized=runtime.is_dockerized(),
-            agent_subdirs=[{"value": item["key"], "label": item["label"]}
-                for item in subagents.get_all_agents_list()
-                if item["key"] != "_example"],
+            agent_subdirs=[
+                {"value": key, "label": item.title or key}
+                for key, item in sorted(
+                    subagents.get_available_agents_dict(None).items()
+                )
+                if key != "default"
+            ],
             knowledge_subdirs=[{"value": subdir, "label": subdir}
                 for subdir in files.get_subdirectories("knowledge", exclude="default")],
             timezones=_timezone_options(),
@@ -284,7 +307,14 @@ def convert_out(settings: Settings) -> SettingsOutput:
         ),
     }
 
-    additional["agent_subdirs"] = _ensure_option_present(additional.get("agent_subdirs"), current.get("agent_profile"))
+    current_profile = current.get("agent_profile")
+    if current_profile and current_profile != "default" and not any(
+        option["value"] == current_profile
+        for option in additional["agent_subdirs"]
+    ):
+        additional["agent_subdirs"].append(
+            {"value": current_profile, "label": f"{current_profile} (unavailable)"}
+        )
     additional["knowledge_subdirs"] = _ensure_option_present(additional.get("knowledge_subdirs"), current.get("agent_knowledge_subdir"))
     if current.get("timezone") != TIMEZONE_AUTO:
         additional["timezones"] = _ensure_option_present(additional.get("timezones"), current.get("timezone"))
@@ -294,7 +324,7 @@ def convert_out(settings: Settings) -> SettingsOutput:
     providers = get_providers("chat") + get_providers("embedding")
     for provider in providers:
         provider_name = provider["value"]
-        api_key = settings["api_keys"].get(provider_name, models.get_api_key(provider_name))
+        api_key = settings["api_keys"].get(provider_name, models.get_api_key_raw(provider_name))
         settings["api_keys"][provider_name] = API_KEY_PLACEHOLDER if api_key and api_key != "None" else ""
 
     # load auth from dotenv
@@ -330,7 +360,7 @@ def convert_out(settings: Settings) -> SettingsOutput:
     return out
 
 def _get_api_key_field(settings: Settings, provider: str, title: str) -> SettingsField:
-    key = settings["api_keys"].get(provider, models.get_api_key(provider))
+    key = settings["api_keys"].get(provider, models.get_api_key_raw(provider))
     # For API keys, use simple asterisk placeholder for existing keys
     return {
         "id": f"api_key_{provider}",
@@ -364,15 +394,44 @@ def get_settings() -> Settings:
     return norm
 
 
+def get_settings_for_prompt() -> Settings:
+    if (snapshot := _prompt_settings_snapshot.get()) is not None:
+        return deepcopy(snapshot)
+    return get_settings()
+
+
+def begin_prompt_settings_snapshot() -> Token:
+    return _prompt_settings_snapshot.set(get_settings())
+
+
+def end_prompt_settings_snapshot(token: Token) -> None:
+    _prompt_settings_snapshot.reset(token)
+
+
 def reload_settings() -> Settings:
     global _settings
     _settings = None
-    return get_settings()
+    current = get_settings()
+    if _prompt_settings_snapshot.get() is not None:
+        _prompt_settings_snapshot.set(deepcopy(current))
+    return current
 
 
 def set_runtime_settings_snapshot(settings: Settings) -> None:
     global _runtime_settings_snapshot
     _runtime_settings_snapshot = settings.copy()
+
+
+@contextmanager
+def version_cache_scope(version: str | None = None):
+    cached = {"version": version or _get_version()}
+    token = _settings_version_cache.set(cached)
+    try:
+        yield
+    finally:
+        # Expire the cache in inherited task contexts too.
+        cached.clear()
+        _settings_version_cache.reset(token)
 
 
 def set_settings(settings: Settings, apply: bool = True, browser_timezone: str | None = None):
@@ -381,7 +440,8 @@ def set_settings(settings: Settings, apply: bool = True, browser_timezone: str |
     _settings = normalize_settings(settings)
     _write_settings_file(_settings)
     if apply:
-        _apply_settings(previous, browser_timezone)
+        with version_cache_scope(_settings["version"]):
+            _apply_settings(previous, browser_timezone)
     return reload_settings()
 
 
@@ -423,6 +483,13 @@ def normalize_settings(settings: Settings) -> Settings:
             except (ValueError, TypeError):
                 copy[key] = value  # make default instead
 
+    copy["file_browser_max_text_size_mb"] = max(1, min(100, copy["file_browser_max_text_size_mb"]))
+    copy["file_browser_max_transfer_size_mb"] = max(1, copy["file_browser_max_transfer_size_mb"])
+    copy["file_browser_max_extract_size_mb"] = max(1, copy["file_browser_max_extract_size_mb"])
+    copy["file_browser_max_archive_entries"] = max(1, copy["file_browser_max_archive_entries"])
+    if copy["agent_profile"] == "default":
+        copy["agent_profile"] = "agent0"
+
     # mcp server token is set automatically
     copy["mcp_server_token"] = create_auth_token()
     copy["max_consecutive_unusable_responses"] = max(
@@ -449,7 +516,7 @@ def _load_sensitive_settings(settings: Settings):
     providers = get_providers("chat") + get_providers("embedding")
     for provider in providers:
         provider_name = provider["value"]
-        api_key = settings["api_keys"].get(provider_name) or models.get_api_key(provider_name)
+        api_key = settings["api_keys"].get(provider_name) or models.get_api_key_raw(provider_name)
         if api_key and api_key != "None":
             settings["api_keys"][provider_name] = api_key
 
@@ -527,7 +594,7 @@ def get_default_settings() -> Settings:
         agent_profile=get_default_value("agent_profile", "agent0"),
         agent_knowledge_subdir=get_default_value("agent_knowledge_subdir", "custom"),
         max_consecutive_unusable_responses=get_default_value(
-            "max_consecutive_unusable_responses", 2
+            "max_consecutive_unusable_responses", 5
         ),
         timezone=_normalize_timezone_setting(get_default_value("timezone", TIMEZONE_AUTO)),
         time_format=_normalize_time_format(get_default_value("time_format", TIME_FORMAT_12H)),
@@ -545,6 +612,10 @@ def get_default_settings() -> Settings:
             "file_browser_remember_last_directory",
             True,
         ),
+        file_browser_max_text_size_mb=get_default_value("file_browser_max_text_size_mb", 10),
+        file_browser_max_transfer_size_mb=get_default_value("file_browser_max_transfer_size_mb", 100),
+        file_browser_max_extract_size_mb=get_default_value("file_browser_max_extract_size_mb", 100),
+        file_browser_max_archive_entries=get_default_value("file_browser_max_archive_entries", 1000),
         rfc_auto_docker=get_default_value("rfc_auto_docker", True),
         rfc_url=get_default_value("rfc_url", "localhost"),
         rfc_password="",
@@ -789,4 +860,4 @@ def create_auth_token() -> str:
 
 
 def _get_version():
-    return git.get_version()
+    return (_settings_version_cache.get() or {}).get("version") or git.get_version()

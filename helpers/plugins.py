@@ -45,6 +45,7 @@ _META_TARGET_RE = re.compile(
 
 
 type ToggleState = Literal["enabled", "disabled"]
+type CallerContext = Literal["ui", "agent", "api"]
 
 
 class PluginAssetFile(TypedDict):
@@ -120,7 +121,7 @@ class PluginUpdateInfo(BaseModel):
 
 def register_watchdogs():
 
-    def on_plugin_change(events: list[WatchItem]):
+    def on_plugin_change(events: list[WatchItem], frontend_reload: bool = True):
         plugin_names: list[str] = []
         for path, _event in events:
             path = path.replace("\\", "/")
@@ -131,7 +132,11 @@ def register_watchdogs():
                 plugin_names.append(plugin_name)
         print_style.PrintStyle.debug("Plugins watchdog triggered", plugin_names)
         python_change = any(path.endswith('.py') for path, _event in events)
-        after_plugin_change(plugin_names or None, python_change=python_change)
+        after_plugin_change(
+            plugin_names or None,
+            python_change=python_change,
+            frontend_reload=frontend_reload,
+        )
 
     relevant_patterns = ["**/extensions/**/*", TOGGLE_FILE_PATTERN, HOOKS_SCRIPT]
 
@@ -161,7 +166,7 @@ def register_watchdogs():
             *expand_patterns(f"*/{projects.PROJECT_META_DIR}/plugins/"),
             *expand_patterns(f"*/{projects.PROJECT_META_DIR}/agents/*/plugins/"),
         ],
-        handler=on_plugin_change,
+        handler=lambda events: on_plugin_change(events, frontend_reload=False),
     )
 
     # add watchdogs for plugin overrides in /agents/plugins and /usr/agents/plugins
@@ -172,16 +177,21 @@ def register_watchdogs():
             files.get_abs_path(subagents.USER_AGENTS_DIR),
         ],
         patterns=[*expand_patterns(f"*/plugins/*/")],
-        handler=on_plugin_change,
+        handler=lambda events: on_plugin_change(events, frontend_reload=False),
     )
 
 
 @extension.extensible
-def after_plugin_change(plugin_names: list[str] | None = None, python_change:bool=False):
+def after_plugin_change(
+    plugin_names: list[str] | None = None,
+    python_change: bool = False,
+    frontend_reload: bool = True,
+):
     clear_plugin_cache(plugin_names)
     if python_change:
         refresh_plugin_modules(plugin_names)
-    send_frontend_reload_notification(plugin_names)
+    if frontend_reload:
+        send_frontend_reload_notification(plugin_names)
 
 
 def refresh_plugin_modules(plugin_names: list[str] | None = None):
@@ -220,8 +230,28 @@ def get_plugin_roots(plugin_name: str = "") -> List[str]:
     ]
 
 
+def get_plugin_name_from_path(path: str | Path) -> str:
+    """Return the plugin directory name for a path under a canonical plugin root."""
+    candidate = Path(path).absolute()
+    for root in get_plugin_roots():
+        try:
+            return candidate.relative_to(Path(root).absolute()).parts[0]
+        except (IndexError, ValueError):
+            continue
+    return ""
+
+
+def get_plugin_root_priority(path: str | Path | None) -> int:
+    """Return root order for a plugin asset; unrecognized paths rank last."""
+    roots = get_plugin_roots()
+    for priority, root in enumerate(roots):
+        if path and Path(path).is_relative_to(root):
+            return priority
+    return len(roots)
+
+
 def get_plugins_list():
-    if cached := cache.get(PLUGINS_LIST_CACHE_AREA, ""):
+    if (cached := cache.get(PLUGINS_LIST_CACHE_AREA, "")) is not None:
         return cached
 
     result: list[str] = []
@@ -424,16 +454,21 @@ def get_plugin_paths(*subpaths: str) -> List[str]:
 
 
 def get_enabled_plugin_paths(agent: Agent | None, *subpaths: str) -> List[str]:
-    if cached := cache.get(
-        ENABLED_PLUGINS_PATHS_CACHE_AREA, cache.determine_cache_key(agent, *subpaths)
-    ):
+    if (
+        cached := cache.get(
+            ENABLED_PLUGINS_PATHS_CACHE_AREA, cache.determine_cache_key(agent, *subpaths)
+        )
+    ) is not None:
         return cached
 
     enabled = get_enabled_plugins(agent)
     paths: list[str] = []
 
-    for plugin in enabled:
-        base_dir = find_plugin_dir(plugin)
+    # Stable root ordering preserves same-root asset precedence.
+    resolved = [find_plugin_dir(plugin) for plugin in enabled]
+    resolved.sort(key=get_plugin_root_priority)
+
+    for base_dir in resolved:
         if not base_dir:
             continue
 
@@ -455,15 +490,22 @@ def get_enabled_plugin_paths(agent: Agent | None, *subpaths: str) -> List[str]:
 
 
 def get_enabled_plugins(agent: Agent | None):
-    if cached := cache.get(
-        ENABLED_PLUGINS_LIST_CACHE_AREA, cache.determine_cache_key(agent)
-    ):
+    if (
+        cached := cache.get(
+            ENABLED_PLUGINS_LIST_CACHE_AREA, cache.determine_cache_key(agent)
+        )
+    ) is not None:
         return cached
 
     plugins = get_plugins_list()
     active = []
 
     for plugin in plugins:
+        meta = get_plugin_meta(plugin)
+        if meta and meta.always_enabled:
+            active.append(plugin)
+            continue
+
         # plugins are toggled via .enabled / .disabled files
         # every plugin is on by default, unless disabled in usr dir
         enabled = True
@@ -535,6 +577,10 @@ def toggle_plugin(
     agent_profile: str = "",
     clear_overrides: bool = False,
 ):
+    meta = get_plugin_meta(plugin_name)
+    if meta and meta.always_enabled and not enabled:
+        raise ValueError(f'Plugin "{plugin_name}" is always enabled.')
+
     if clear_overrides:
         all_toggles = find_plugin_assets(
             TOGGLE_FILE_PATTERN,
@@ -561,7 +607,9 @@ def toggle_plugin(
         files.write_file(enabled_file, "")
     else:
         files.write_file(disabled_file, "")
-    after_plugin_change([plugin_name])
+    after_plugin_change(
+        [plugin_name], frontend_reload=not (project_name or agent_profile)
+    )
 
 
 @extension.extensible
@@ -570,6 +618,7 @@ def get_plugin_config(
     agent: Agent | None = None,
     project_name: str | None = None,
     agent_profile: str | None = None,
+    caller: CallerContext = "api",
 ):
 
     default_used = False
@@ -615,6 +664,7 @@ def get_plugin_config(
         agent=agent,
         project_name=project_name,
         agent_profile=agent_profile,
+        hook_context={"caller": caller},
     )
 
     return result
@@ -643,7 +693,11 @@ def get_default_plugin_config(plugin_name: str):
 
 @extension.extensible
 def save_plugin_config(
-    plugin_name: str, project_name: str, agent_profile: str, settings: dict
+    plugin_name: str,
+    project_name: str,
+    agent_profile: str,
+    settings: dict,
+    caller: CallerContext = "api",
 ):
     file_path = determine_plugin_asset_path(
         plugin_name, project_name, agent_profile, CONFIG_FILE_NAME
@@ -657,6 +711,7 @@ def save_plugin_config(
         project_name=project_name,
         agent_profile=agent_profile,
         settings=settings,
+        hook_context={"caller": caller},
     )
 
     # or do standard load

@@ -54,7 +54,7 @@ ones you trust and remove what you do not use.
 When you want to make your own first plugin, start with something small and
 visible. The [Create a Small Plugin](create-plugin.md) guide walks through a
 local Web UI plugin that adds an unread dot to the chat list and then reviews it
-with `a0-review-plugin`.
+with the review reference in `a0-create-plugin`.
 
 ## Skills, Agent Profiles, And Model Presets
 
@@ -84,13 +84,14 @@ chat.
 
 ![Agent Profile selector](../res/usage/webui/agent-profile-selector.png)
 
-Use the profile menu near the chat input to switch the current chat. Use
-**Settings -> Agent Config** when you want to change the default for new chats.
+Use the profile menu near the chat input to switch the current chat or edit a
+profile. Select **Manage agents** to create, duplicate, reset, delete, or change
+profile availability for Global or one project.
 
-The same menu includes **Create new Agent Profile**. It places a ready-to-send
-message in the input so Agent Zero can guide you through creating a new profile.
+![Manage agents with a project-specific availability choice](../res/usage/webui/agent-profile-manager.png)
 
-![Create Agent Profile prompt](../res/usage/webui/agent-profile-create-prompt.png)
+Use **Settings -> Agent Config** when you want to change the default profile for
+new Global chats.
 
 See the [Agent Profiles guide](agent-profiles.md).
 

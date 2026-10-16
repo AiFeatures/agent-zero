@@ -32,6 +32,8 @@ chat:
     models_list:
       endpoint_url: "https://api.venice.ai/api/v1/models"
     kwargs:
+      a0_api_mode: chat
+      a0_prompt_cache_mode: prompt_cache_key
       api_base: https://llm.agent-zero.ai/v1
       venice_parameters:
         include_venice_system_prompt: false
@@ -42,24 +44,35 @@ chat:
       endpoint_url: "https://api.anthropic.com/v1/models"
       params:
         limit: "1000"
+    kwargs:
+      a0_api_mode: chat
+  cerebras:
+    name: Cerebras
+    litellm_provider: cerebras
+    models_list:
+      endpoint_url: "/models"
+      default_base: https://api.cerebras.ai/v1
+    kwargs:
+      a0_api_mode: chat
   cometapi:
     name: CometAPI
     litellm_provider: cometapi
     models_list:
       endpoint_url: "https://api.cometapi.com/v1/models"
+    kwargs:
+      a0_api_mode: chat
   deepseek:
     name: DeepSeek
     litellm_provider: deepseek
     models_list:
       endpoint_url: "https://api.deepseek.com/models"
+    kwargs:
+      a0_api_mode: chat
   github_copilot:
     name: GitHub Copilot
     litellm_provider: github_copilot
     kwargs:
-      extra_headers:
-        "Editor-Version": "vscode/1.85.1"
-        "Copilot-Integration-Id": "vscode-chat"
-        "Copilot-Vision-Request": "true"
+      a0_api_mode: chat
   google:
     name: Google
     litellm_provider: gemini
@@ -69,14 +82,20 @@ chat:
       params:
         pageSize: "1000"
       default_base: "https://generativelanguage.googleapis.com"
+    kwargs:
+      a0_api_mode: chat
   groq:
     name: Groq
     litellm_provider: groq
     models_list:
       endpoint_url: "https://api.groq.com/openai/v1/models"
+    kwargs:
+      a0_api_mode: chat
   huggingface:
     name: HuggingFace
     litellm_provider: huggingface
+    kwargs:
+      a0_api_mode: chat
   lm_studio:
     name: LM Studio
     litellm_provider: lm_studio
@@ -86,7 +105,6 @@ chat:
     kwargs:
       a0_api_mode: chat
       api_base: "http://host.docker.internal:1234/v1"
-      api_key: "lm-studio"
   llama_cpp:
     name: llama.cpp
     litellm_provider: hosted_vllm
@@ -96,29 +114,35 @@ chat:
     kwargs:
       a0_api_mode: chat
       api_base: "http://host.docker.internal:8080/v1"
-      api_key: "llama-cpp"
   mistral:
     name: Mistral AI
     litellm_provider: mistral
     models_list:
       endpoint_url: "https://api.mistral.ai/v1/models"
+    kwargs:
+      a0_api_mode: chat
   moonshot:
     name: Moonshot AI
     litellm_provider: moonshot
     models_list:
       endpoint_url: "https://api.moonshot.cn/v1/models"
+    kwargs:
+      a0_api_mode: chat
   nebius:
     name: Nebius Token Factory
-    litellm_provider: openai
+    litellm_provider: nebius
     models_list:
       endpoint_url: "/models"
     kwargs:
+      a0_api_mode: chat
       api_base: https://api.tokenfactory.nebius.com/v1
   nvidia_nim:
     name: NVIDIA NIM
     litellm_provider: nvidia_nim
     models_list:
       endpoint_url: "https://integrate.api.nvidia.com/v1/models"
+    kwargs:
+      a0_api_mode: chat
   ollama:
     name: Ollama
     litellm_provider: ollama
@@ -138,7 +162,6 @@ chat:
     kwargs:
       a0_api_mode: chat
       api_base: "http://host.docker.internal:8000/v1"
-      api_key: "omlx"
   ollama_cloud:
     name: Ollama Cloud
     litellm_provider: openai
@@ -152,6 +175,8 @@ chat:
     litellm_provider: openai
     models_list:
       endpoint_url: "https://api.openai.com/v1/models"
+    kwargs:
+      a0_api_mode: chat
   azure:
     name: OpenAI Azure
     litellm_provider: azure
@@ -159,15 +184,20 @@ chat:
       endpoint_url: "/openai/models"
       params:
         api-version: "2024-10-21"
+    kwargs:
+      a0_api_mode: chat
   bedrock:
     name: AWS Bedrock
     litellm_provider: bedrock
+    kwargs:
+      a0_api_mode: chat
   openrouter:
     name: OpenRouter
     litellm_provider: openrouter
     models_list:
       endpoint_url: "https://openrouter.ai/api/v1/models"
     kwargs:
+      a0_api_mode: chat
       extra_headers:
         "HTTP-Referer": "https://agent-zero.ai/"
         "X-Title": "Agent Zero"
@@ -177,16 +207,19 @@ chat:
     litellm_provider: sambanova
     models_list:
       endpoint_url: "https://api.sambanova.ai/v1/models"
+    kwargs:
+      a0_api_mode: chat
   venice:
     name: Venice.ai
-    litellm_provider: openai
+    litellm_provider: veniceai
     models_list:
       endpoint_url: "https://api.venice.ai/api/v1/models"
     kwargs:
       a0_api_mode: chat
-      api_base: https://api.venice.ai/api/v1
-      venice_parameters:
-        include_venice_system_prompt: false
+      a0_prompt_cache_mode: prompt_cache_key
+      extra_body:
+        venice_parameters:
+          include_venice_system_prompt: false
   vllm:
     name: vLLM
     litellm_provider: hosted_vllm
@@ -196,25 +229,28 @@ chat:
     kwargs:
       a0_api_mode: chat
       api_base: "http://host.docker.internal:8000/v1"
-      api_key: "vllm"
   xai:
     name: xAI
     litellm_provider: xai
     models_list:
       endpoint_url: "https://api.x.ai/v1/models"
+    kwargs:
+      a0_api_mode: chat
   zai:
     name: Z.AI
-    litellm_provider: openai
+    litellm_provider: zai
     models_list:
       endpoint_url: "/models"
+      default_base: https://api.z.ai/api/paas/v4
     kwargs:
-      api_base: https://api.z.ai/api/paas/v4
+      a0_api_mode: chat
   zai_coding:
     name: Z.AI Coding
-    litellm_provider: openai
+    litellm_provider: zai
     models_list:
       endpoint_url: "/models"
     kwargs:
+      a0_api_mode: chat
       api_base: https://api.z.ai/api/coding/paas/v4
   other:
     name: Other OpenAI compatible
@@ -234,13 +270,11 @@ embedding:
     litellm_provider: lm_studio
     kwargs:
       api_base: "http://host.docker.internal:1234/v1"
-      api_key: "lm-studio"
   llama_cpp:
     name: llama.cpp
     litellm_provider: hosted_vllm
     kwargs:
       api_base: "http://host.docker.internal:8080/v1"
-      api_key: "llama-cpp"
   mistral:
     name: Mistral AI
     litellm_provider: mistral
@@ -259,7 +293,6 @@ embedding:
     litellm_provider: hosted_vllm
     kwargs:
       api_base: "http://host.docker.internal:8000/v1"
-      api_key: "omlx"
   openai:
     name: OpenAI
     litellm_provider: openai
@@ -269,12 +302,10 @@ embedding:
   bedrock:
     name: AWS Bedrock
     litellm_provider: bedrock
-  # TODO: OpenRouter not yet supported by LiteLLM, replace with native litellm_provider openrouter and remove api_base when ready
   openrouter:
     name: OpenRouter
-    litellm_provider: openai
+    litellm_provider: openrouter
     kwargs:
-      api_base: https://openrouter.ai/api/v1
       extra_headers:
         "HTTP-Referer": "https://agent-zero.ai/"
         "X-Title": "Agent Zero"
@@ -298,7 +329,6 @@ embedding:
     litellm_provider: hosted_vllm
     kwargs:
       api_base: "http://host.docker.internal:8000/v1"
-      api_key: "vllm"
   other:
     name: Other OpenAI compatible
     litellm_provider: openai

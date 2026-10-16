@@ -23,12 +23,16 @@
 - The tool is intended for independent calls only; dependent operations remain sequential.
 - Independent calls should share one batch even when they use different tools; split only for dependencies, ordering, shared mutable state, or parent-context state/tool-availability changes.
 - `document_query` is intentionally excluded from wrapped calls because it is too heavy for parallel workers and must be called sequentially.
+- `response` is excluded because a wrapped response cannot end the parent message loop; final responses must be top-level calls.
 - `action="start"` starts calls and optionally waits according to `wait`.
 - `action="await"` waits for requested job IDs until completion or `timeout`; timeout returns running job handles without canceling them.
 - `action="collect"` returns completed job results without waiting.
 - `action="cancel"` requests cancellation for requested job IDs.
-- Recursive use of `parallel` from inside a direct background tool worker is blocked before execution; subordinate child chats started by `call_subordinate` can use normal child-chat tools, including `parallel`.
+- Legacy action values `background` (start with `wait=false`) and `wait` (same as `await`) still resolve; prompts document only canonical `start`/`await`/`collect`/`cancel`.
+- Recursive use of `parallel` from inside a direct background tool worker is blocked before execution; numbered subordinate child chats can use normal child-chat tools, including `parallel`, to create their next-level descendants.
+- Wrapped `call_subordinate` uses the same lifecycle as a top-level call. `job_id` identifies one parallel invocation, while its returned `context_id` identifies the reusable child agent for later `reset=false` calls.
 - The wrapper tool does not create its own visible process-step log; each wrapped child call owns the visible log row, and the wrapper result is recorded only in model history.
+- Terminal direct jobs are collected after the wrapper result enters model history. Any explicitly queued parent-history messages are appended next, preserving result-before-content ordering for native multimodal tools.
 
 ## Key Concepts
 

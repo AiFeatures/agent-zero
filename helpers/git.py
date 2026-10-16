@@ -1,11 +1,12 @@
 from git import Git, Repo
 from giturlparse import parse
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass
 import os
 import subprocess
 import base64
 import re
+import time
 from urllib.parse import urlparse, urlunparse
 from helpers import files
 from helpers.localization import Localization
@@ -101,8 +102,8 @@ class GitRepoReleaseInfo:
 def _format_git_timestamp(timestamp: int) -> str:
     return datetime.fromtimestamp(
         timestamp,
-        tz=Localization.get().get_tzinfo(),
-    ).strftime('%Y-%m-%d %H:%M:%S %Z')
+        tz=timezone.utc,
+    ).strftime('%Y-%m-%d %H:%M:%S')
 
 
 def _split_describe_version(describe: str) -> tuple[str, int]:
@@ -453,7 +454,33 @@ def clone_repo(url: str, dest: str, token: str | None = None):
     return Repo(dest)
 
 
-def update_repo(repo_path: str) -> Repo:
+class DirtyTreeConflictError(Exception):
+    """Raised when a plugin update conflicts with local commits or edits."""
+
+    def __init__(self, conflicting_files: list[str]):
+        super().__init__(
+            "Local changes conflict with the update. "
+            "Your plugin was restored without applying the update."
+        )
+        self.conflicting_files = conflicting_files
+
+
+def _list_dirty_tracked_files(repo: "Repo") -> list[str]:
+    """Return tracked files with uncommitted modifications."""
+    changed = {d.a_path for d in repo.index.diff(None)}
+    changed.update(d.a_path for d in repo.index.diff("HEAD"))
+    return sorted(p for p in changed if p)
+
+
+def update_repo(repo_path: str, auto_stash: bool = True) -> Repo:
+    """Update from the tracking branch, rebasing local commits onto upstream.
+
+    When `auto_stash` is True (default) and the working tree has uncommitted
+    changes to tracked files, those changes are stashed before the rebase and
+    reapplied afterwards. If they conflict with the update, the repo and local
+    edits are restored to their original state before `DirtyTreeConflictError`
+    is raised.
+    """
     repo = Repo(repo_path)
     if repo.bare:
         raise ValueError(f"Repository at {repo_path} is bare and cannot be updated.")
@@ -461,7 +488,11 @@ def update_repo(repo_path: str) -> Repo:
     if repo.head.is_detached:
         raise ValueError("Repository HEAD is detached.")
 
-    branch = repo.active_branch.name
+    if any(os.path.exists(os.path.join(repo.git_dir, name)) for name in (
+        "rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD",
+    )):
+        raise ValueError("A Git operation is already in progress. Finish or abort it before updating.")
+
     tracking_branch = repo.active_branch.tracking_branch()
     if tracking_branch is None:
         raise ValueError("Current branch has no tracking remote branch.")
@@ -469,8 +500,40 @@ def update_repo(repo_path: str) -> Repo:
     env = os.environ.copy()
     env['GIT_TERMINAL_PROMPT'] = '0'
 
-    with repo.git.custom_environment(**env):
-        repo.remotes[tracking_branch.remote_name].pull(branch)
+    dirty_files = _list_dirty_tracked_files(repo) if auto_stash else []
+    original_head = repo.head.commit.hexsha
+    if dirty_files:
+        stash_msg = f"a0-auto-stash-{int(time.time())}"
+        repo.git.stash("push", "-m", stash_msg, "--", *dirty_files)
+
+    def restore_original_state():
+        repo.git.reset("--hard", original_head)
+        if dirty_files:
+            repo.git.stash("pop", "--index")
+
+    try:
+        with repo.git.custom_environment(**env):
+            repo.remotes[tracking_branch.remote_name].fetch(tracking_branch.remote_head)
+            repo.git.rebase("--no-autostash", "--no-update-refs", tracking_branch.path)
+    except Exception as error:
+        conflicting_files = sorted(repo.index.unmerged_blobs())
+        if any(os.path.exists(os.path.join(repo.git_dir, name)) for name in (
+            "rebase-merge", "rebase-apply",
+        )):
+            repo.git.rebase("--abort")
+        if dirty_files:
+            restore_original_state()
+        if conflicting_files:
+            raise DirtyTreeConflictError(conflicting_files) from error
+        raise
+
+    if dirty_files:
+        try:
+            repo.git.stash("pop")
+        except Exception as error:
+            conflicting_files = sorted(repo.index.unmerged_blobs()) or dirty_files
+            restore_original_state()
+            raise DirtyTreeConflictError(conflicting_files) from error
 
     return repo
 

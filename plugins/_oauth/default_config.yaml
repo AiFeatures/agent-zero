@@ -21,9 +21,14 @@ codex:
   forced_workspace_id: ""
 
   upstream_base_url: "https://chatgpt.com/backend-api/codex"
-  codex_version: ""
+  codex_version: "0.160.1"
   models: []
   request_timeout_seconds: 120
+
+  # Defaults for Codex Responses requests. Explicit model/request values win.
+  reasoning_effort: "high"
+  reasoning_summary: "auto"
+  text_verbosity: "medium"
 
   # The OpenAI-compatible wrapper is mounted at /oauth/codex/v1.
   # It is loopback-only by default and does not emit CORS headers.

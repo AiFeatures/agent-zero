@@ -21,27 +21,27 @@
         <div class="preset-editor-intro">
           <div class="field-title">Model Presets</div>
           <div class="field-description">
-            Each preset contains the complete main, utility, and embedding model setup. Default is always available.
+            Each preset contains the main, utility, embedding, and optional vision-sidecar setup. Default is always available.
           </div>
         </div>
 
         <div class="preset-editor-toolbar">
           <label class="preset-editor-select">
             <span class="field-title">Preset</span>
-            <select x-model.number="selectedKey">
+            <select x-model.number="selectedKey" x-init="$nextTick(() => $el.focus())">
               <template x-for="preset in presets" :key="preset._key">
-                <option :value="preset._key" x-text="preset.name"></option>
+                <option :value="preset._key" :selected="preset._key === selectedKey" x-text="preset.name"></option>
               </template>
             </select>
           </label>
           <button type="button" class="button" @click="addPreset()">
-            <span class="icon material-symbols-outlined">add</span>
+            <x-icon class="icon" name="add"></x-icon>
             Add
           </button>
           <button type="button" class="button"
                   x-show="canDeleteSelected"
                   @click="$confirmClick($event, () => removeSelectedPreset())">
-            <span class="icon material-symbols-outlined">delete</span>
+            <x-icon class="icon" name="delete"></x-icon>
             Delete
           </button>
         </div>
@@ -67,9 +67,21 @@
                 <div class="section-title">Main Model</div>
                 <div class="section-description">Primary model for conversations, reasoning, and tools.</div>
               </div>
-              <div x-data="{ get model() { return selectedPreset.chat; }, modelType: 'chat', providers: $store.modelConfig.chatProviders, searchType: 'chat', apiKeyMode: 'store' }">
+              <div x-data="{ get model() { return selectedPreset.chat; }, get visionModel() { return selectedPreset.vision; }, modelType: 'chat', providers: $store.modelConfig.chatProviders, searchType: 'chat', apiKeyMode: 'store' }">
                 <x-component path="/plugins/_model_config/webui/model-field.html"></x-component>
               </div>
+              <template x-if="!selectedPreset.chat.vision || selectedPreset.vision.override_main">
+                <div class="vision-sidecar-selector">
+                  <div class="field-title">Vision sidecar</div>
+                  <div class="field-description"
+                       x-text="selectedPreset.chat.vision
+                         ? 'Overrides Main model vision for vision_load.'
+                         : 'Used by vision_load while Main model vision is disabled. Leave empty to disable image analysis.'"></div>
+                  <div x-data="{ get model() { return selectedPreset.vision; }, modelType: 'vision', providers: $store.modelConfig.chatProviders, searchType: 'chat', apiKeyMode: 'store' }">
+                    <x-component path="/plugins/_model_config/webui/model-field.html"></x-component>
+                  </div>
+                </div>
+              </template>
             </section>
 
             <section class="preset-model-section">
@@ -96,12 +108,12 @@
 
         <div class="preset-editor-secondary-actions">
           <button type="button" class="text-button" @click="$store.modelConfig.openApiKeysFromSummary()">
-            <span class="material-symbols-outlined">key</span>
+            <x-icon name="key"></x-icon>
             API Keys
           </button>
           <button type="button" class="text-button"
                   @click="$confirmClick($event, () => resetPresets())">
-            <span class="material-symbols-outlined">restart_alt</span>
+            <x-icon name="restart_alt"></x-icon>
             Restore bundled presets
           </button>
         </div>
@@ -164,6 +176,11 @@
 
     .preset-model-heading .section-title {
       margin-top: 0;
+    }
+
+    .vision-sidecar-selector {
+      margin: 0.75rem 0 0;
+      padding: 0.25rem 0 0;
     }
 
     .preset-editor-secondary-actions {

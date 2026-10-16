@@ -13,7 +13,7 @@
 
 ## Local Contracts
 
-- Tests must not require real API keys, network-only services, private user data, or local `usr/` runtime state.
+- Tests must not require real API keys, network-only services, private user data, or local `usr/` runtime state. Manual provider demos must guard model creation and requests behind their executable entry point so collection never runs them.
 - Keep tests deterministic and isolated from existing chats, uploads, downloads, plugin state, and settings.
 - Prefer exercising public helper/API contracts over fragile implementation details when practical.
 - Security regression tests should assert the protected behavior directly.
@@ -32,6 +32,8 @@
 
 - Run `pytest` for broad changes.
 - Run `pytest tests/test_name.py` for narrow changes and mention any broader test gaps at closeout.
+- Run `pytest tests/test_litellm_sdk.py -q` for LiteLLM/OpenAI upgrades. Its loopback provider exercises the installed SDK's sync/async calls, streaming, tool/state preservation, fallback, embeddings, and Anthropic cache markers without real keys or external requests.
+- Run `pytest tests/test_framework_dependencies.py -q` for dependency migration changes; verify stale self-update environments, process restart, and already-current image installs.
 
 ## Child DOX Index
 

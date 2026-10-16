@@ -147,17 +147,14 @@ class SkillsTool(Tool):
         if not skills:
             return "No skills found."
 
-        # Stable output: sort by name
         skills_sorted = sorted(skills, key=lambda s: s.name.lower())
-
-        lines: List[str] = []
-        lines.append(f"Available skills ({len(skills_sorted)}):")
+        lines = [f"Available skills ({len(skills_sorted)}):"]
         for s in skills_sorted:
             tags = f" tags={','.join(s.tags)}" if s.tags else ""
             ver = f" v{s.version}" if s.version else ""
             desc = (s.description or "").strip()
             if len(desc) > 200:
-                desc = desc[:200].rstrip() + "…"
+                desc = desc[:200].rstrip() + "..."
             lines.append(f"- {s.name}{ver}{tags}: {desc}")
         lines.append("")
         lines.append("Tip: use skills_tool action=search or action=load for details.")

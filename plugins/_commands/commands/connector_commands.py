@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from agent import AgentContext
+from api.stop import stop_context
 from helpers import message_queue as mq
-from helpers import plugins, projects
+from helpers import plugins, projects, subagents
 from helpers.integration_commands import try_handle_command
 from helpers.state_monitor_integration import mark_dirty_for_context
 
@@ -33,7 +34,9 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
     if command == "project":
         return _handle_project(context, raw_args)
     if command == "profile":
-        return _handle_profile(context, raw_args)
+        return _handle_profile(context, raw_args, arguments)
+    if command == "permissions":
+        return _handle_permissions(context)
     if command == "plugins":
         return _effects({"type": "open_modal", "path": "/components/plugins/list/plugin-list.html"})
     if command == "compact":
@@ -44,6 +47,8 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
         return _effects(_toast("Resume requested."), {"type": "pause_agent", "paused": False})
     if command == "nudge":
         return _effects(_toast("Nudge sent."), {"type": "nudge_agent"})
+    if command == "stop":
+        return _handle_stop(context)
     if command == "send":
         return _handle_queue(context, ["send"])
     if command == "queue":
@@ -110,13 +115,66 @@ def _handle_project(context: AgentContext | None, raw_args: str) -> dict[str, An
     return _show_markdown("Project", try_handle_command(context, f"/project {raw_args}") or "")
 
 
-def _handle_profile(context: AgentContext | None, raw_args: str) -> dict[str, Any]:
+def _handle_profile(
+    context: AgentContext | None,
+    raw_args: str,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
     if not raw_args:
-        return _effects({"type": "open_modal", "path": "/components/settings/settings.html"})
+        return _effects({"type": "open_agent_editor", "view": "manage"})
     error = _require_context(context)
     if error:
         return _effects(_toast(error, level="error"))
-    return _show_markdown("Agent Profile", try_handle_command(context, f"/agent {raw_args}") or "")
+
+    positional = [str(value) for value in arguments.get("positional") or []]
+    project_name = projects.get_context_project_name(context)
+    desired = raw_args.strip().strip("\"'").casefold()
+    profiles = subagents.get_available_agents_dict(project_name or None)
+    if len(positional) < 2 or any(
+        desired in {profile_id.casefold(), (item.title or profile_id).casefold()}
+        for profile_id, item in profiles.items()
+    ):
+        return _show_markdown("Agent Profile", try_handle_command(context, f"/agent {raw_args}") or "")
+
+    from plugins._agent_editor.helpers import editor
+
+    title = positional[0]
+    instructions = " ".join(positional[1:])
+    try:
+        profile_id, _ = editor.save_easy_profile(title, instructions, context)
+    except ValueError as exc:
+        return _effects(_toast(str(exc), level="error"))
+    return _effects(
+        _toast(f"Created agent {title}."),
+        {
+            "type": "test_agent_profile",
+            "profile_id": profile_id,
+            "project_name": project_name or "",
+        },
+    )
+
+
+def _handle_permissions(context: AgentContext | None) -> dict[str, Any]:
+    error = _require_context(context)
+    if error:
+        return _effects(_toast(error, level="error"))
+    profile_id = str(getattr(context.config, "profile", "") or "").strip()
+    if not profile_id:
+        return _effects(_toast("The current agent profile is unavailable.", level="error"))
+    if profile_id == "default":
+        return _effects(
+            _toast(
+                "The Default utility profile has no editable permissions.",
+                level="error",
+            )
+        )
+    return _effects(
+        {
+            "type": "open_agent_editor",
+            "view": "edit",
+            "profile_id": profile_id,
+        }
+    )
 
 
 def _handle_models(context: AgentContext | None, raw_args: str) -> dict[str, Any]:
@@ -210,6 +268,14 @@ def _handle_queue(context: AgentContext | None, tokens: list[str]) -> dict[str, 
         return _effects(_toast("Queued message removed."))
 
     return _effects(_toast("Usage: /queue [send|clear|remove <number|id>]", level="error"))
+
+
+def _handle_stop(context: AgentContext | None) -> dict[str, Any]:
+    error = _require_context(context)
+    if error:
+        return _effects(_toast(error, level="error"))
+    result = stop_context(context)
+    return _effects(_toast(str(result["message"])))
 
 
 def _queue_summary(queue: list[dict[str, Any]]) -> str:
