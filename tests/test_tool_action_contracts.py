@@ -215,7 +215,9 @@ def _load_loaded_skills_extension(monkeypatch, skill_root: Path):
     return importlib.import_module(module_name)
 
 
-def _load_relevant_skills_extension(monkeypatch, queries: list[str]):
+def _load_relevant_skills_extension(
+    monkeypatch, queries: list[str], *, skills_tool_allowed: bool = True
+):
     extension_stub = types.ModuleType("helpers.extension")
     extension_stub.Extension = _FakeExtension
     monkeypatch.setitem(sys.modules, "helpers.extension", extension_stub)
@@ -233,9 +235,16 @@ def _load_relevant_skills_extension(monkeypatch, queries: list[str]):
     skills_stub.search_skills = _search_skills
     monkeypatch.setitem(sys.modules, "helpers.skills", skills_stub)
 
+    tool_policy_stub = types.ModuleType("helpers.tool_policy")
+    tool_policy_stub.resolve_tool = lambda *args, **kwargs: types.SimpleNamespace(
+        allowed=skills_tool_allowed
+    )
+    monkeypatch.setitem(sys.modules, "helpers.tool_policy", tool_policy_stub)
+
     import helpers
 
     monkeypatch.setattr(helpers, "skills", skills_stub, raising=False)
+    monkeypatch.setattr(helpers, "tool_policy", tool_policy_stub, raising=False)
 
     module_name = "extensions.python.message_loop_prompts_after._63_recall_relevant_skills"
     sys.modules.pop(module_name, None)
@@ -274,6 +283,10 @@ def _load_computer_use_remote_tool(monkeypatch):
     ws_runtime_stub = types.ModuleType("plugins._a0_connector.helpers.ws_runtime")
     ws_runtime_stub.clear_pending_computer_use_op = lambda *args, **kwargs: None
     ws_runtime_stub.computer_use_metadata_for_sid = lambda *args, **kwargs: {}
+    async def _emit_connector_event(*args, **kwargs):
+        return None
+
+    ws_runtime_stub.emit_connector_event = _emit_connector_event
     ws_runtime_stub.select_computer_use_target_sid = lambda *args, **kwargs: "sid"
     ws_runtime_stub.store_pending_computer_use_op = lambda *args, **kwargs: None
     monkeypatch.setitem(
@@ -336,6 +349,7 @@ def test_skills_tool_defaults_missing_action_to_list(monkeypatch, tmp_path: Path
 
     assert "Available skills" in response.message
     assert "browser-form-workflows" in response.message
+    assert "slash commands" not in response.message
 
 
 def test_skills_tool_load_appends_skill_instructions_as_tool_result(
@@ -520,6 +534,29 @@ def test_relevant_skill_recall_uses_raw_user_message(monkeypatch):
     assert queries == ["Open a browser and take a screenshot."]
 
 
+def test_relevant_skill_recall_skips_blocked_skills_tool(monkeypatch):
+    queries: list[str] = []
+    module = _load_relevant_skills_extension(
+        monkeypatch, queries, skills_tool_allowed=False
+    )
+    loop_data = types.SimpleNamespace(
+        iteration=0,
+        user_message=types.SimpleNamespace(
+            content="Open a browser and take a screenshot.",
+            output_text=lambda: "Open a browser and take a screenshot.",
+        ),
+        extras_temporary={},
+    )
+
+    asyncio.run(
+        module.RecallRelevantSkills(types.SimpleNamespace()).execute(
+            loop_data=loop_data
+        )
+    )
+
+    assert queries == []
+
+
 def test_skills_tool_read_file_action_reads_inside_skill_dir(
     monkeypatch, tmp_path: Path
 ):
@@ -676,9 +713,10 @@ def test_behaviour_adjustment_normalizes_duplicate_rules(monkeypatch):
 
 
 def test_behaviour_prompts_preserve_exact_rules_and_avoid_promptinclude():
-    behaviour_prompt = Path("prompts/agent.system.tool.behaviour.md").read_text(
-        encoding="utf-8"
+    behaviour_prompt_path = Path(
+        "plugins/_memory/prompts/agent.system.tool.behaviour.md"
     )
+    behaviour_prompt = behaviour_prompt_path.read_text(encoding="utf-8")
     merge_prompt = Path("prompts/behaviour.merge.sys.md").read_text(
         encoding="utf-8"
     )
@@ -688,8 +726,10 @@ def test_behaviour_prompts_preserve_exact_rules_and_avoid_promptinclude():
 
     assert "exact-response rules" in behaviour_prompt
     assert "preserve it verbatim" in behaviour_prompt
+    assert "do not edit promptinclude files" in behaviour_prompt
+    assert not Path("prompts/agent.system.tool.behaviour.md").exists()
     assert "respond exactly with a phrase" in merge_prompt
-    assert "use behaviour_adjustment, not promptinclude files" in promptinclude_prompt
+    assert "behaviour_adjustment" not in promptinclude_prompt
 
 
 def _load_a2a_chat_tool(monkeypatch):
@@ -768,6 +808,9 @@ def test_notify_user_prompt_documents_numeric_priority_values():
 
 def test_tool_prompts_prevent_top_level_multi_tool():
     tools_prompt = Path("prompts/agent.system.tools.md").read_text(encoding="utf-8")
+    parallel_prompt = Path("prompts/agent.system.tool.parallel.md").read_text(
+        encoding="utf-8"
+    )
     communication_prompt = Path("prompts/agent.system.main.communication.md").read_text(
         encoding="utf-8"
     )
@@ -776,9 +819,10 @@ def test_tool_prompts_prevent_top_level_multi_tool():
     )
 
     assert "Do not invent top-level `multi` or generic batch tools" in tools_prompt
-    assert "listed wrapper for independent concurrent calls is `parallel`" in tools_prompt
+    assert "`parallel`" not in tools_prompt
+    assert "run independent tool calls concurrently" in parallel_prompt
     assert "never an action name such as `read`, `write`, `terminal`, or `multi`" in communication_prompt
-    assert "independent operations concurrently" in communication_prompt
+    assert "independent operations concurrently" not in communication_prompt
     assert 'Never use `tool_name: "multi"`' in browser_prompt
 
 
@@ -1138,6 +1182,103 @@ def test_computer_use_remote_start_session_reports_backend_features_and_windows_
     assert "backend=windows/windows" in message
     assert "features=uia-tree-snapshot, uia-structural-targeting" in message
     assert "host-computer-use-windows" in message
+
+
+def test_computer_use_remote_forwards_documented_macos_app_scope(monkeypatch):
+    import json
+    import re
+
+    module = _load_computer_use_remote_tool(monkeypatch)
+    tool = object.__new__(module.ComputerUseRemote)
+    skill = (Path(__file__).resolve().parents[1] / "plugins/_a0_connector/skills/host-computer-use-macos/SKILL.md").read_text()
+    example = json.loads(re.search(r"```json\n(.*?)\n```", skill, re.S).group(1))
+    tool.args = example["tool_args"]
+    payload = tool._build_payload(op_id="scoped", context_id="ctx", action="element_action")
+    assert payload["target"] == {"bundle_id": "com.example.editor", "role": "AXButton", "title": "Save"}
+    assert payload["dispatch"] == "background"
+    assert payload["operation"] == "press"
+    tool.args = {**tool.args, "pid": 123, "window_id": "ax-pid:123:path:0", "element_index": 2}
+    payload = tool._build_payload(op_id="indexed", context_id="ctx", action="element_action")
+    assert (payload["pid"], payload["window_id"], payload["element_index"]) == (123, "ax-pid:123:path:0", 2)
+    assert "element_index" not in payload["target"]
+
+
+def test_computer_use_remote_forwards_linux_window_scope_and_type_guard(monkeypatch):
+    module = _load_computer_use_remote_tool(monkeypatch)
+    tool = object.__new__(module.ComputerUseRemote)
+    window_id = "atspi-pid:57929:path:20.0"
+
+    tool.args = {
+        "action": "ax_snapshot",
+        "pid": 57929,
+        "window_id": window_id,
+        "max_depth": 4,
+        "max_nodes": 80,
+    }
+    snapshot = tool._build_payload(op_id="op-snapshot", context_id="ctx", action="ax_snapshot")
+    tool.args = {"action": "type", "window_id": window_id, "text": "hello", "submit": True}
+    typed = tool._build_payload(op_id="op-type", context_id="ctx", action="type")
+
+    assert snapshot["pid"] == 57929
+    assert snapshot["window_id"] == window_id
+    assert snapshot["max_depth"] == 4
+    assert snapshot["max_nodes"] == 80
+    assert typed["window_id"] == window_id
+    assert typed["text"] == "hello"
+    assert typed["submit"] is True
+
+
+def test_computer_use_remote_receipts_separate_injection_from_verified_result(monkeypatch):
+    module = _load_computer_use_remote_tool(monkeypatch)
+    tool = object.__new__(module.ComputerUseRemote)
+    window_id = "atspi-pid:57929:path:20.0"
+
+    verified = tool._extract_result(
+        "type",
+        {
+            "ok": True,
+            "result": {
+                "text": "hello",
+                "window_id": window_id,
+                "focus_verified": True,
+            },
+        },
+    )
+    unverified = tool._extract_result(
+        "type",
+        {"ok": True, "result": {"text": "hello"}},
+    )
+    focused = tool._extract_result(
+        "element_action",
+        {
+            "ok": True,
+            "result": {
+                "operation": "focus",
+                "target": {"element_index": 0, "role": "frame", "title": "Discord"},
+                "requested_dispatch": "foreground",
+                "actual_dispatch": "foreground",
+                "focus_verified": True,
+            },
+        },
+    )
+    scoped = tool._extract_result(
+        "ax_snapshot",
+        {
+            "ok": True,
+            "result": {
+                "app": {"name": "Discord"},
+                "tree": {"role": "frame", "title": "Discord"},
+                "node_count": 2,
+                "window_id": window_id,
+                "scoped": True,
+            },
+        },
+    )
+
+    assert f"verified active window_id={window_id}" in verified
+    assert "destination was not verified" in unverified
+    assert "focus_verified=true" in focused
+    assert f"scoped to window_id={window_id}" in scoped
 
 
 def test_computer_use_remote_capture_artifact_is_chat_scoped(monkeypatch, tmp_path: Path):

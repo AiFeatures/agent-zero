@@ -1,5 +1,6 @@
 
 ## Communication
+- Always reply through a tool call; plain-text output is invalid and never reaches the user
 - Output must be valid JSON with double quotes for all keys and string values
 - No JSON in markdown fences
 - Do not invent unavailable tool names and args
@@ -11,9 +12,11 @@
 - tool_args: key value pairs tool arguments
 - `tool_name` must be one listed tool name, never an action name such as `read`, `write`, `terminal`, or `multi`
 - To do dependent operations, call one tool now, then call the next tool after the first result
-- To do independent operations concurrently, use only the listed `parallel` tool
+- Treat the closing `}` of a tool call as an end-of-turn signal. Terminate generation immediately.
 
 - No text output before or after the JSON object
+
+Fences in the examples below are documentation formatting only. Your actual output starts with `{` and ends with `}` — no fences, no language tag, no prose.
 
 ### Response example
 ~~~json

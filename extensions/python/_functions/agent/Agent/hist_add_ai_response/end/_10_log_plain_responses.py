@@ -14,7 +14,7 @@ class LogPlainResponses(Extension):
             call_kwargs = {}
 
         llm_result = call_kwargs.get("llm_result")
-        if getattr(llm_result, "mode", "") != "responses":
+        if getattr(llm_result, "mode", "") != "responses" or getattr(llm_result, "function_calls", None):
             return
 
         message = call_kwargs.get("message")
@@ -23,7 +23,10 @@ class LogPlainResponses(Extension):
             message = call_args[1]
         if not isinstance(message, str) or not message:
             return
-        if extract_tools.extract_tool_request(message) is not None:
+        if (
+            extract_tools.extract_tool_request(message) is not None
+            or extract_tools.is_misformatted_tool_request(message)
+        ):
             return
 
         params = getattr(getattr(self.agent, "loop_data", None), "params_temporary", None)

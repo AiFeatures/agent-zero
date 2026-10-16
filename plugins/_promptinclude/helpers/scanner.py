@@ -109,11 +109,6 @@ def scan_promptinclude_files(
                 token_count=file_tokens, status="ok",
             ))
 
-    # remaining unprocessed files from matched list
-    remaining_unprocessed = len(matched) - len(result_files) - skipped_count
-    if remaining_unprocessed > 0:
-        skipped_count += remaining_unprocessed
-
     return ScanResult(files=result_files, skipped_count=skipped_count)
 
 
@@ -131,7 +126,7 @@ def _build_ignore_spec(gitignore: str) -> PathSpec | None:
     ]
     if not lines:
         return None
-    return PathSpec.from_lines("gitwildmatch", lines)
+    return PathSpec.from_lines("gitignore", lines)
 
 
 def _find_matching_files(

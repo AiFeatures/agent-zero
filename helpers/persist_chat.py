@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from agent import Agent, AgentConfig, AgentContext, AgentContextType
-from helpers import files, history
+from helpers import files, history, settings
 from helpers.litellm_transport import delete_stored_response_ids
 from helpers.localization import Localization
 from initialize import initialize_agent
@@ -80,20 +80,26 @@ def load_tmp_chats():
             json_files.append(chat_file)
 
     ctxids = []
-    for file in json_files:
-        try:
-            js = files.read_file(file)
-            data = json.loads(js)
-            ctx = _deserialize_context(data)
-            mark_chat_saved(ctx)
-            ctxids.append(ctx.id)
-        except Exception as e:
-            print(f"Error loading chat {file}: {e}")
+    with settings.version_cache_scope():
+        for file in json_files:
+            try:
+                js = files.read_file(file)
+                data = json.loads(js)
+                ctx = _deserialize_context(data)
+                mark_chat_saved(ctx)
+                ctxids.append(ctx.id)
+            except Exception as e:
+                print(f"Error loading chat {file}: {e}")
     return ctxids
 
 
 def _get_chat_file_path(ctxid: str):
     return files.get_abs_path(CHATS_FOLDER, ctxid, CHAT_FILE_NAME)
+
+
+def chat_file_exists(ctxid: str) -> bool:
+    """True if this context has a persisted chat.json on disk."""
+    return files.exists(_get_chat_file_path(ctxid))
 
 
 def _write_atomic(path: str, content: str) -> None:
@@ -161,6 +167,8 @@ def export_json_chat(context: AgentContext):
 
 def remove_chat(ctxid):
     """Remove a chat or task context"""
+    if not isinstance(ctxid, str) or not ctxid.strip():
+        raise ValueError("remove_chat: context id must not be empty")
     _delete_provider_responses_for_chat(ctxid)
     path = get_chat_folder_path(ctxid)
     files.delete_dir(path)
@@ -168,6 +176,8 @@ def remove_chat(ctxid):
 
 def remove_msg_files(ctxid):
     """Remove all message files for a chat or task context"""
+    if not isinstance(ctxid, str) or not ctxid.strip():
+        raise ValueError("remove_msg_files: context id must not be empty")
     path = get_chat_msg_files_folder(ctxid)
     files.delete_dir(path)
 

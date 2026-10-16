@@ -63,10 +63,13 @@ class LLMResult:
     usage: dict[str, Any] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
     capability: dict[str, Any] = field(default_factory=dict)
+    history_extras: str = ""
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "LLMResult":
         data = data or {}
+        mode = data.get("mode")
+        extras = data.get("history_extras")
         return cls(
             response=str(data.get("response") or ""),
             reasoning=str(data.get("reasoning") or ""),
@@ -77,11 +80,12 @@ class LLMResult:
                 ResponseItem.from_any(item) for item in data.get("output_items") or []
             ],
             provider_model_key=str(data.get("provider_model_key") or ""),
-            mode=str(data.get("mode") or "responses"),
+            mode=str(mode if mode is not None else "responses"),
             state=str(data.get("state") or "provider"),
             usage=object_to_dict(data.get("usage") or {}),
             raw=object_to_dict(data.get("raw") or {}),
             capability=object_to_dict(data.get("capability") or {}),
+            history_extras=extras if isinstance(extras, str) else "",
         )
 
     @classmethod
@@ -124,6 +128,7 @@ class LLMResult:
         *,
         response: str,
         reasoning: str = "",
+        usage: dict[str, Any] | None = None,
         input_items: list[dict[str, Any]] | None = None,
         output_items: list[dict[str, Any]] | None = None,
         provider_model_key: str = "",
@@ -160,11 +165,17 @@ class LLMResult:
             provider_model_key=provider_model_key,
             mode="chat_completions",
             state="off",
+            usage=object_to_dict(usage or {}),
             capability=dict(capability or {}),
         )
         if not result.response and result.function_calls:
             result.response = result.function_calls_text()
         return result
+
+    @classmethod
+    def non_llm(cls) -> "LLMResult":
+        """Sentinel for non-LLM AI turns; no response_id, mode/state off."""
+        return cls(mode="", state="off")
 
     @property
     def function_calls(self) -> list[ResponseFunctionCall]:
@@ -194,10 +205,18 @@ class LLMResult:
         if not calls:
             return ""
         if len(calls) == 1:
-            return json.dumps(calls[0])
+            return json.dumps(calls[0], ensure_ascii=False)
         return json.dumps(
-            {"tool_name": "parallel_tool_calls", "tool_args": {"calls": calls}}
+            {"tool_name": "parallel_tool_calls", "tool_args": {"calls": calls}},
+            ensure_ascii=False,
         )
+
+    def repeat_response_text(self) -> str:
+        """Compare public text and calls, excluding provider IDs and reasoning."""
+        calls = self.function_calls_text()
+        if not calls:
+            return self.response
+        return json.dumps([output_text(self.raw, self.output_items), calls], ensure_ascii=False)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -213,6 +232,7 @@ class LLMResult:
             "usage": self.usage,
             "raw": self.raw,
             "capability": self.capability,
+            "history_extras": self.history_extras,
         }
 
     def metadata(self) -> dict[str, Any]:
@@ -226,6 +246,7 @@ class LLMResult:
                 "state": self.state,
                 "usage": self.usage,
                 "capability": self.capability,
+                **({"history_extras": self.history_extras} if self.history_extras else {}),
             }
         }
 

@@ -44,11 +44,12 @@ Direct child DOX files:
 | [hist_add_tool_result/AGENTS.md](hist_add_tool_result/AGENTS.md) | Tool-result history side effects. |
 | [job_loop/AGENTS.md](job_loop/AGENTS.md) | Periodic backend maintenance jobs. |
 | [message_loop_end/AGENTS.md](message_loop_end/AGENTS.md) | End-of-message-loop history and persistence behavior. |
+| [message_loop_result/AGENTS.md](message_loop_result/AGENTS.md) | Completed model-result normalization and default-processing interception. |
 | [message_loop_prompts_after/AGENTS.md](message_loop_prompts_after/AGENTS.md) | Prompt protocol and extras assembled around message-loop prompt construction. |
 | [message_loop_prompts_before/AGENTS.md](message_loop_prompts_before/AGENTS.md) | Pre-prompt-construction message-loop gates. |
 | [message_loop_start/AGENTS.md](message_loop_start/AGENTS.md) | Start-of-message-loop iteration state. |
 | [monologue_end/AGENTS.md](monologue_end/AGENTS.md) | End-of-monologue UI and cleanup behavior. |
-| [monologue_start/AGENTS.md](monologue_start/AGENTS.md) | Start-of-monologue behavior such as chat renaming. |
+| [monologue_start/AGENTS.md](monologue_start/AGENTS.md) | Core start-of-monologue lifecycle extensions. |
 | [process_chain_end/AGENTS.md](process_chain_end/AGENTS.md) | Process-chain completion and queued-message handling. |
 | [reasoning_stream/AGENTS.md](reasoning_stream/AGENTS.md) | Full reasoning stream handling. |
 | [reasoning_stream_chunk/AGENTS.md](reasoning_stream_chunk/AGENTS.md) | Reasoning stream chunk masking. |

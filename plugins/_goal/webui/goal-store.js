@@ -1,5 +1,6 @@
 import { createStore } from "/js/AlpineStore.js";
 import { callJsonApi } from "/js/api.js";
+import { formatDuration } from "/js/time-utils.js";
 import { store as chatsStore } from "/components/sidebar/chats/chats-store.js";
 import {
   toastFrontendError,
@@ -11,11 +12,11 @@ const GOAL_API_PATH = "/plugins/_goal/goal";
 const model = {
   goal: null,
   loading: false,
+  loadSeq: 0,
   saving: false,
   editing: false,
   draft: "",
   lastContextId: "",
-  intervalId: null,
   clockIntervalId: null,
   goalChangedHandler: null,
   now: Date.now(),
@@ -69,30 +70,22 @@ const model = {
   },
 
   get elapsedLabel() {
-    const seconds = this.elapsedSeconds;
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const remainingSeconds = seconds % 60;
-    if (hours) return `${hours}h ${minutes}m`;
-    if (minutes) return `${minutes}m ${remainingSeconds}s`;
-    return `${remainingSeconds}s`;
+    return formatDuration(this.elapsedSeconds * 1000);
   },
 
   onMount() {
     document.getElementById("progress-bar-box")?.classList.add("has-goal-bar");
     this.goalChangedHandler = (event) => {
       const detail = event?.detail || {};
-      if (detail.goal === null) {
-        this.goal = null;
-      }
-      void this.refresh(true);
+      if (detail.context_id && detail.context_id !== this.contextId) return;
+      this.goal = detail.goal || null;
+      this.now = Date.now();
+      if (!this.goal) this.editing = false;
     };
     window.addEventListener("goal:changed", this.goalChangedHandler);
     this.clockIntervalId = window.setInterval(() => {
       this.now = Date.now();
     }, 1000);
-    this.intervalId = window.setInterval(() => this.refresh(), 3000);
-    void this.refresh(true);
   },
 
   cleanup() {
@@ -100,25 +93,27 @@ const model = {
     if (this.goalChangedHandler) {
       window.removeEventListener("goal:changed", this.goalChangedHandler);
     }
-    if (this.intervalId) {
-      window.clearInterval(this.intervalId);
-    }
     if (this.clockIntervalId) {
       window.clearInterval(this.clockIntervalId);
     }
     this.goalChangedHandler = null;
-    this.intervalId = null;
     this.clockIntervalId = null;
   },
 
   async refresh(force = false) {
     const contextId = this.contextId;
+    if (!force && this.loading && contextId === this.lastContextId) return;
+    const requestSeq = ++this.loadSeq;
+    if (contextId !== this.lastContextId) {
+      this.goal = null;
+      this.editing = false;
+    }
+    this.lastContextId = contextId;
     if (!contextId) {
       this.goal = null;
-      this.lastContextId = "";
+      this.loading = false;
       return;
     }
-    if (!force && this.loading) return;
 
     this.loading = true;
     try {
@@ -126,16 +121,16 @@ const model = {
         action: "get",
         context_id: contextId,
       });
+      if (requestSeq !== this.loadSeq || contextId !== this.contextId) return;
       this.goal = response?.goal || null;
       this.now = Date.now();
-      this.lastContextId = contextId;
       if (!this.goal) this.editing = false;
     } catch (error) {
+      if (requestSeq !== this.loadSeq || contextId !== this.contextId) return;
       console.error("Failed to load goal:", error);
       this.goal = null;
-      this.lastContextId = contextId;
     } finally {
-      this.loading = false;
+      if (requestSeq === this.loadSeq) this.loading = false;
     }
   },
 

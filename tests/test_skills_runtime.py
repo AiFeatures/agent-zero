@@ -16,6 +16,7 @@ HELPER_STUB_MODULES = (
     "helpers.subagents",
     "helpers.file_tree",
     "helpers.runtime",
+    "helpers.extension",
 )
 
 
@@ -50,6 +51,9 @@ def _register_helpers_stubs():
     file_tree = types.ModuleType("helpers.file_tree")
     file_tree.file_tree = lambda *args, **kwargs: ""
 
+    extension = types.ModuleType("helpers.extension")
+    extension.extensible = lambda func: func
+
     runtime = types.ModuleType("helpers.runtime")
     runtime.is_development = lambda: False
 
@@ -67,6 +71,7 @@ def _register_helpers_stubs():
     sys.modules["helpers.subagents"] = subagents
     sys.modules["helpers.file_tree"] = file_tree
     sys.modules["helpers.runtime"] = runtime
+    sys.modules["helpers.extension"] = extension
 
 
 def _load_skills_helper_module():
@@ -122,6 +127,18 @@ def _scope_config(entries=None, *, hidden_entries=None, max_active_skills=None):
     if max_active_skills is not None:
         config["max_active_skills"] = max_active_skills
     return config
+
+
+def _write_skill_catalog(root: Path, *names: str) -> Path:
+    skills_root = root / "skills"
+    for name in names:
+        skill_dir = skills_root / name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: {name} description\n---\nBody\n",
+            encoding="utf-8",
+        )
+    return skills_root
 
 
 def test_active_skills_cap_is_twenty():
@@ -405,7 +422,7 @@ def test_renamed_skills_use_standard_frontmatter_only():
         PROJECT_ROOT / "plugins" / "_a0_connector" / "skills" / "host-computer-use-macos" / "SKILL.md",
         PROJECT_ROOT / "plugins" / "_a0_connector" / "skills" / "host-computer-use-windows" / "SKILL.md",
         PROJECT_ROOT / "plugins" / "_a0_connector" / "skills" / "host-file-editing" / "SKILL.md",
-        PROJECT_ROOT / "plugins" / "_a0_connector" / "skills" / "setup-a0-cli" / "SKILL.md",
+        PROJECT_ROOT / "skills" / "setup-a0-cli" / "SKILL.md",
         PROJECT_ROOT / "plugins" / "_browser" / "skills" / "browser-automation" / "SKILL.md",
         PROJECT_ROOT / "plugins" / "_browser" / "skills" / "browser-extension-control" / "SKILL.md",
         PROJECT_ROOT / "plugins" / "_browser" / "skills" / "browser-form-workflows" / "SKILL.md",
@@ -417,7 +434,7 @@ def test_renamed_skills_use_standard_frontmatter_only():
         expected_keys = {"name", "description"}
         if path.parent.name == "host-computer-use":
             expected_keys.update({"tags", "triggers"})
-        if path.parent.name in {"browser-automation", "browser-form-workflows"}:
+        if path.parent.name in {"browser-automation", "browser-extension-control", "browser-form-workflows", "setup-a0-cli"}:
             expected_keys.add("triggers")
         assert set(frontmatter) == expected_keys
         assert frontmatter["name"] == path.parent.name
@@ -614,14 +631,7 @@ def test_activating_new_skill_uses_scope_configured_limit(monkeypatch):
 
 
 def test_hidden_skills_filter_agent_visible_skill_catalog(monkeypatch, tmp_path: Path):
-    skills_root = tmp_path / "skills"
-    for name in ("alpha-skill", "beta-skill"):
-        skill_dir = skills_root / name
-        skill_dir.mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text(
-            f"---\nname: {name}\ndescription: {name} description\n---\nBody\n",
-            encoding="utf-8",
-        )
+    skills_root = _write_skill_catalog(tmp_path, "alpha-skill", "beta-skill")
 
     monkeypatch.setattr(
         runtime.subagents,
@@ -674,3 +684,96 @@ def test_chat_visible_override_restores_scope_hidden_skill(monkeypatch):
     runtime.hide_chat_skill(agent, {"name": "beta-skill"})
     assert runtime.get_hidden_skills(agent) == [{"name": "beta-skill"}]
     assert runtime.get_chat_visible_skills(agent.context) == []
+
+
+def test_visibility_policy_is_absent_until_explicitly_configured():
+    normalized = runtime.normalize_skills_config({"hidden_skills": []})
+
+    assert "visibility_policy" not in normalized
+    assert runtime.normalize_visibility_policy(
+        {
+            "mode": "custom",
+            "default": "block",
+            "allowed": ["alpha", "alpha", {"name": "missing"}],
+            "blocked": [],
+        }
+    ) == {
+        "mode": "custom",
+        "default": "block",
+        "allowed": ["alpha", "missing"],
+        "blocked": [],
+    }
+
+
+def test_allow_only_visibility_blocks_new_skills_without_pinning(
+    monkeypatch, tmp_path: Path
+):
+    skills_root = _write_skill_catalog(tmp_path, "alpha-skill", "new-skill")
+
+    monkeypatch.setattr(
+        runtime.subagents,
+        "get_paths",
+        lambda agent, *parts: [str(skills_root)],
+    )
+    monkeypatch.setattr(runtime.files, "exists", lambda path: Path(str(path)) == skills_root)
+    monkeypatch.setattr(
+        runtime.plugin_helpers,
+        "get_plugin_config",
+        lambda *args, **kwargs: {
+            "visibility_policy": {
+                "mode": "custom",
+                "default": "block",
+                "allowed": ["alpha-skill"],
+                "blocked": [],
+            }
+        },
+    )
+    agent = DummyAgent()
+
+    assert [skill.name for skill in runtime.list_skills(agent)] == ["alpha-skill"]
+    assert runtime.find_skill("new-skill", agent=agent) is None
+    assert runtime.load_skill_for_agent("new-skill", agent=agent) == (
+        "Error: skill 'new-skill' not found"
+    )
+    assert runtime.get_active_skills(agent) == []
+
+    catalog = {item["name"]: item for item in runtime.list_skill_catalog(agent=agent)}
+    assert catalog["alpha-skill"]["hidden"] is False
+    assert catalog["new-skill"]["hidden"] is True
+
+
+def test_profile_blocked_skill_cannot_be_reenabled_by_chat_override(monkeypatch):
+    monkeypatch.setattr(
+        runtime.plugin_helpers,
+        "get_plugin_config",
+        lambda *args, **kwargs: {
+            "visibility_policy": {
+                "mode": "custom",
+                "default": "allow",
+                "allowed": [],
+                "blocked": ["beta-skill"],
+            }
+        },
+    )
+    agent = DummyAgent()
+
+    with pytest.raises(ValueError, match='Skill "beta-skill" is blocked'):
+        runtime.activate_chat_skill(agent, {"name": "beta-skill"})
+    with pytest.raises(ValueError, match='Skill "beta-skill" is blocked'):
+        runtime.show_chat_skill(agent, {"name": "beta-skill"})
+    with pytest.raises(ValueError, match="is blocked"):
+        runtime.activate_chat_skill(
+            agent, {"path": "/a0/skills/beta-skill"}
+        )
+    with pytest.raises(ValueError, match="is blocked"):
+        runtime.show_chat_skill(agent, {"path": "/a0/skills/beta-skill"})
+
+    agent.context.set_data(
+        runtime.CONTEXT_DATA_NAME_CHAT_VISIBLE_SKILLS,
+        [{"name": "beta-skill"}],
+    )
+    agent.context.set_data(
+        runtime.CONTEXT_DATA_NAME_CHAT_ACTIVE_SKILLS,
+        [{"path": "/a0/skills/beta-skill"}],
+    )
+    assert runtime.get_active_skills(agent) == []

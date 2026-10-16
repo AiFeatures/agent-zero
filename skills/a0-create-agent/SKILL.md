@@ -1,6 +1,6 @@
 ---
 name: a0-create-agent
-description: Create a new Agent Zero agent profile (subordinate). Covers where profiles live (user / plugin-distributed / project-scoped), the agent.yaml schema, the prompt inheritance & override model, and optional profile-specific tools and extensions. Use for any "create/add/new agent profile" request.
+description: "Create Agent Zero profiles with agent.yaml, prompt overrides, tools and extensions."
 version: 1.0.0
 tags: ["agents", "profile", "create", "new", "subordinate"]
 trigger_patterns:
@@ -265,7 +265,7 @@ Profiles inherit all prompts from `/a0/prompts/` and from `/a0/agents/default/`.
 
 ### The canonical override: `agent.system.main.specifics.md`
 
-This is the designated extension slot for profile-specific role, identity, and behavior instructions. The file ships **empty** in both `/a0/prompts/agent.system.main.specifics.md` and `/a0/agents/default/agent.system.main.specifics.md` precisely so profiles can fill it in without fighting the base prompt. It is included from `agent.system.main.md` right after `agent.system.main.role.md`, so whatever you put here layers on top of the inherited role.
+This is the designated extension slot for profile-specific role, identity, and behavior instructions. The file ships **empty** in both `/a0/prompts/agent.system.main.specifics.md` and `/a0/agents/default/prompts/agent.system.main.specifics.md` precisely so profiles can fill it in without fighting the base prompt. It is included from `agent.system.main.md` right after `agent.system.main.role.md`, so whatever you put here layers on top of the inherited role.
 
 **Every shipped profile in `/a0/agents/` overrides this file** — a good sanity check that this is the right place for your specialization. Look at the existing profiles for concrete shape:
 

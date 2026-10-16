@@ -17,7 +17,7 @@
                         <button class="notification-action" @click="$store.notificationStore?.clearAll()"
                             :disabled="!$store.notificationStore || $store.notificationStore.getDisplayNotifications().length === 0"
                             title="Clear All">
-                            <span class="material-symbols-outlined">delete</span> Clear All
+                            <x-icon name="delete"></x-icon> Clear All
                         </button>
                     </div>
                 </div>
@@ -27,7 +27,8 @@
                     x-show="$store.notificationStore && $store.notificationStore.getDisplayNotifications().length > 0">
                     <template x-for="notification in ($store.notificationStore?.getDisplayNotifications() || [])"
                         :key="notification.id">
-                        <div class="notification-item" x-data="{ expanded: false }"
+                        <div class="notification-item"
+                            x-data="{ expanded: false, toast: { ...notification, toastId: 'toast-' + notification.id } }"
                             :class="$store.notificationStore?.getNotificationItemClass(notification) || 'notification-item'"
                             @click="$store.notificationStore?.markAsRead(notification.id)">
 
@@ -71,7 +72,7 @@
                 <div class="notification-empty"
                     x-show="!$store.notificationStore || $store.notificationStore.getDisplayNotifications().length === 0">
                     <div class="notification-empty-icon">
-                        <span class="material-symbols-outlined">notifications</span>
+                        <x-icon name="notifications"></x-icon>
                     </div>
                     <p>No notifications to display</p>
                 </div>

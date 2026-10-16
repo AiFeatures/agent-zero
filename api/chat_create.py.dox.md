@@ -20,12 +20,15 @@
 - Update this file whenever request payloads, authentication or CSRF requirements, response shapes, route side effects, or WebSocket event contracts change.
 - `CreateChat` is an `ApiHandler`.
 - `CreateChat` defines `process(...)`.
+- A newly created chat reconciles its profile after project inheritance, so it
+  never keeps a profile unavailable in the inherited scope.
+- Optional `project_name` explicitly selects a project, with `""` meaning no project. Validate it before creating a context; an explicit choice overrides inheritance even when inheritance is disabled. Omitting it retains the existing behavior.
 - Observed side-effect areas: filesystem writes, model calls, plugin state, settings/state persistence.
 - Imported dependency areas include: `agent`, `helpers`, `helpers.api`.
 
 ## Key Concepts
 
-- Important called helpers/classes observed in the source: `self.use_context`, `mark_dirty_all`, `guids.generate_id`, `current_context.get_data`, `current_context.get_output_data`, `new_context.set_data`, `new_context.set_output_data`, `is_chat_override_allowed`, `settings.get_settings`.
+- Important called helpers/classes observed in the source: `self.use_context`, `mark_dirty_all`, `guids.generate_id`, `current_context.get_data`, `current_context.get_output_data`, `new_context.set_data`, `new_context.set_output_data`, `is_chat_override_allowed`, `settings.get_settings`, `projects.get_context_project_name`, `projects.reconcile_agent_profile`.
 - Keep request/response, tool, or helper semantics documented here at the same time as source changes.
 
 ## Work Guidance
@@ -38,6 +41,7 @@
 
 - Run endpoint-specific or API/WebSocket tests for changed behavior; smoke-test browser callers when no focused test exists.
 - Related tests observed by source search:
+  - `tests/test_chat_create.py`
   - `tests/test_browser_agent_regressions.py`
 
 ## Child DOX Index

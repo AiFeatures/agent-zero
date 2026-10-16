@@ -38,6 +38,10 @@
 - `_normalize_max_active_skills(value: Any) -> int`
 - `get_max_active_skills(agent: Agent | None=..., project_name: str | None=...) -> int`
 - `normalize_skills_config(config: dict[str, Any] | None) -> dict[str, Any]`
+- `normalize_visibility_policy(raw: Any) -> dict[str, Any]`
+- `get_visibility_policy(agent: Agent | None) -> dict[str, Any]`
+- `is_skill_allowed(policy, skill_or_entry) -> bool`
+- `ensure_skill_visible(agent, entry) -> None`
 - `normalize_active_skills(raw: Any, limit: int | None=...) -> list[ActiveSkillEntry]`
 - `normalize_hidden_skills(raw: Any) -> list[ActiveSkillEntry]`
 - `normalize_skill_entries(raw: Any, limit: int | None=...) -> list[ActiveSkillEntry]`
@@ -53,13 +57,24 @@
 
 ## Runtime Contracts
 
+- `get_skill_roots` is extensible. Plugin end hooks may filter agent-scoped roots from current runtime state; do not mutate cached path lists. Global discovery without an agent retains installed roots. Listing, search, lookup, and skill reattachment use this resolver.
+
 - Helper modules own reusable framework APIs and must preserve public callers unless all callers, tests, and docs are updated together.
 - Update this file whenever public functions, classes, persistence behavior, path/security assumptions, side effects, or cross-module contracts change.
 - Loaded skill names are chat-wide context data under `CONTEXT_DATA_NAME_LOADED_SKILLS`; legacy agent-local `loaded_skills` lists are migrated into context data and cleared when read.
 - Loaded skill bodies live in chat history; hiding a skill changes catalog visibility but does not remove the loaded-skill ledger.
+- `_skills.visibility_policy` is profile-aware and uses explicit future-skill
+  allow/block defaults. It filters discovery, search, new loading, chat
+  activation, and active-skill resolution without removing instructions already
+  stored in chat history.
+- Visibility policy IDs match both canonical skill paths and their directory
+  names, and bulk discovery resolves the effective policy only once.
+- Legacy `hidden_skills` remains default-allow with blocked exceptions; a chat
+  visibility override cannot bypass profile visibility policy.
 - `build_active_skills_prompt()` returns empty because selected skills are loaded through history, not prompt protocol.
 - `search_skills()` normalizes query words, scores normal terms against skill names, and scores only long terms against tags/triggers; descriptions match only full query phrases so generic prose does not produce irrelevant suggestions.
 - `find_skill(validate=False)` lets validation tooling resolve a skill with incomplete metadata while preserving runtime validation by default.
+- Slash command discovery is delegated to the built-in `_commands` helper through a local import, preserving its project/global/bundled/plugin precedence and avoiding its `split_frontmatter` import cycle. Picker-hidden commands remain hidden from Skills; reading a command returns its definition without executing it.
 - Invalid `SKILL.md` frontmatter emits a once-per-path scan warning with the skipped skill path/name and a line number when the parser can identify one directly.
 - Observed side-effect areas: filesystem reads, filesystem deletion, plugin state, settings/state persistence, context data, secret handling.
 - Imported dependency areas include: `__future__`, `dataclasses`, `helpers`, `os`, `pathlib`, `re`, `typing`.

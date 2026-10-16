@@ -9,6 +9,7 @@ import { store as chatsStore } from "/components/sidebar/chats/chats-store.js";
 const ICON_MARKER_RE = /icon:\/\/([a-zA-Z0-9_]+)(\[(?:\\.|[^\]])*\])?/g;
 const FENCE_LINE_RE = /^```([A-Za-z0-9_-]*)?$/;
 const BLOCK_TAGS = new Set(["DIV", "P", "LI"]);
+const DRAFT_STORAGE_PREFIX = "a0:chat-draft:";
 
 function escapeHTML(value) {
   return String(value ?? "")
@@ -37,8 +38,8 @@ function convertIconMarkersToHtml(value) {
     html += escapeHTML(text.slice(lastIndex, offset));
     const tooltip = unescapeIconTooltip(tooltipBlock) || iconName;
     html += (
-      `<span class="icon material-symbols-outlined chat-input-progress-icon" ` +
-      `title="${escapeHTML(tooltip)}">${escapeHTML(iconName)}</span>`
+      `<x-icon class="icon chat-input-progress-icon" ` +
+      `title="${escapeHTML(tooltip)}" name="${escapeHTML(iconName)}"></x-icon>`
     );
     lastIndex = offset + match.length;
     return match;
@@ -56,6 +57,7 @@ const model = {
   _historyIndex: null,
   _draft: "",
   _historyCtxid: null,
+  _draftCtxid: null,
   /** Composer + menu (bottom actions moved into dropdown) */
   chatMoreMenuOpen: false,
   progressText: "",
@@ -68,6 +70,7 @@ const model = {
   set message(value) {
     this._message = String(value ?? "");
     this._renderEditorFromText(this._message);
+    this._saveDraft();
   },
 
   toggleChatMoreMenu() {
@@ -83,6 +86,7 @@ const model = {
     const hasQueue = !!messageQueueStore?.hasQueue;
     const running = !!chatsStore.selectedContext?.running;
 
+    if (running && !hasInput) return "stop";
     if (hasQueue && !hasInput) return "all";
     if ((running || hasQueue) && hasInput) return "queue";
     return "normal";
@@ -91,15 +95,19 @@ const model = {
   get inputPlaceholder() {
     if (!chatsStore.selected) return "Ask anything to start a new chat";
     const state = this._getSendState();
-    if (state === "all") return "Press Enter to send queued messages";
+    if ((state === "all" || state === "stop") && messageQueueStore?.hasQueue) {
+      return "Press Enter to send queued messages";
+    }
     if (this.showProgressPlaceholder) return "";
     return "Type your message here...";
   },
 
   get showProgressPlaceholder() {
+    const state = this._getSendState();
     return (
       !!chatsStore.selected &&
-      this._getSendState() !== "all" &&
+      state !== "all" &&
+      !(state === "stop" && messageQueueStore?.hasQueue) &&
       !!this.progressText &&
       !this.message
     );
@@ -112,6 +120,7 @@ const model = {
   // Computed: send button icon type
   get sendButtonIcon() {
     const state = this._getSendState();
+    if (state === "stop") return "stop";
     if (state === "all") return "send_and_archive";
     if (state === "queue") return "schedule_send";
     return "arrow_forward";
@@ -120,6 +129,7 @@ const model = {
   // Computed: send button CSS class
   get sendButtonClass() {
     const state = this._getSendState();
+    if (state === "stop") return "stop";
     if (state === "all") return "send-queue send-all";
     if (state === "queue") return "send-queue queue";
     return "";
@@ -128,6 +138,7 @@ const model = {
   // Computed: send button title
   get sendButtonTitle() {
     const state = this._getSendState();
+    if (state === "stop") return "Stop agent";
     if (state === "all") return "Send all queued messages";
     if (state === "queue") return "Add to queue";
     return "Send message";
@@ -140,14 +151,16 @@ const model = {
 
   async sendMessage() {
     this._syncMessageFromEditor();
-
-    // Capture sent prompt to per-chat history (bash-style)
-    try { this._pushHistory(this.message); } catch (_e) { /* ignore */ }
+    const pendingMessage = this.message;
 
     if (!chatsStore.selected && (this.message.trim() || attachmentsStore?.attachments?.length > 0)) {
       const ctxid = await chatsStore.newChat();
       if (!ctxid && !chatsStore.selected) return;
+      this.message = pendingMessage;
     }
+
+    // Capture sent prompt to per-chat history (bash-style)
+    try { this._pushHistory(this.message); } catch (_e) { /* ignore */ }
 
     // Delegate to the global function
     if (globalThis.sendMessage) {
@@ -155,8 +168,18 @@ const model = {
     }
   },
 
+  async activateSendButton() {
+    this._syncMessageFromEditor();
+    if (this._getSendState() === "stop") {
+      await this.stopAgent();
+      return;
+    }
+    await this.sendMessage();
+  },
+
   mountEditor(editor) {
     this._editorEl = editor;
+    this.setDraftContext(shortcuts.getCurrentContextId());
     this._renderEditorFromText(this._message);
     this.adjustTextareaHeight({ target: editor });
   },
@@ -238,6 +261,7 @@ const model = {
     if (!this._editorEl) return;
     this._message = this._editorToMarkdown();
     this._setEditorEmptyState();
+    this._saveDraft();
   },
 
   _isInCodeBlock(target) {
@@ -393,10 +417,8 @@ const model = {
   adjustTextareaHeight($event = null) {
     const target = $event?.target || null;
     for (const chatInput of this._composerTextareas(target)) {
+      // Contenteditable grows naturally; freezing scrollHeight can retain a transient layout.
       chatInput.style.height = "auto";
-      chatInput.style.height = chatInput.scrollHeight + "px";
-      // pick up any layout shift triggered by the height assignment
-      chatInput.style.height = Math.max(chatInput.scrollHeight, parseInt(chatInput.style.height)) + "px";
     }
   },
 
@@ -412,6 +434,18 @@ const model = {
       this.paused = prev;
       if (globalThis.toastFetchError) {
         globalThis.toastFetchError("Error pausing agent", e);
+      }
+    }
+  },
+
+  async stopAgent() {
+    try {
+      const context = globalThis.getContext?.();
+      if (!context || !globalThis.sendJsonData) return;
+      await globalThis.sendJsonData("/stop", { context });
+    } catch (e) {
+      if (globalThis.toastFetchError) {
+        globalThis.toastFetchError("Error stopping agent", e);
       }
     }
   },
@@ -548,6 +582,33 @@ const model = {
     if (chatInput) {
       chatInput.focus();
     }
+  },
+
+  setDraftContext(ctxid) {
+    const nextCtxid = String(ctxid || "");
+    if (nextCtxid === this._draftCtxid) return;
+    if (this._draftCtxid !== null) this._syncMessageFromEditor();
+
+    this._draftCtxid = nextCtxid;
+    this._historyIndex = null;
+    this._draft = "";
+
+    let draft = "";
+    if (nextCtxid) {
+      try { draft = sessionStorage.getItem(DRAFT_STORAGE_PREFIX + nextCtxid) || ""; } catch (_e) { /* ignore */ }
+    }
+    this._message = draft;
+    this._renderEditorFromText(draft);
+    queueMicrotask(() => this.adjustTextareaHeight());
+  },
+
+  _saveDraft() {
+    if (!this._draftCtxid) return;
+    try {
+      const key = DRAFT_STORAGE_PREFIX + this._draftCtxid;
+      if (this._message) sessionStorage.setItem(key, this._message);
+      else sessionStorage.removeItem(key);
+    } catch (_e) { /* ignore unavailable storage */ }
   },
 
   _loadHistory() {

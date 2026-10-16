@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shutil
+import subprocess
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -63,6 +65,91 @@ def _save_command(
         extra_frontmatter=extra_frontmatter or {},
     )
     return _track_paths(scope, command)
+
+
+def test_composer_picker_ignores_postfix_slashes() -> None:
+    if not shutil.which("node"):
+        pytest.skip("Node.js is required to execute the slash-picker regression.")
+
+    source = (Path(__file__).resolve().parents[1] / "webui" / "commands-slash-store.js").read_text(
+        encoding="utf-8"
+    )
+    start = source.index("function parseSlashInput(")
+    function_source = source[start : source.index("\n\nfunction notifyError", start)]
+    script = f"""
+{function_source}
+
+const leading = parseSlashInput("/goal objective", false);
+if (!leading.active || leading.query !== "goal") throw new Error("leading command hidden");
+
+const trailing = parseSlashInput("objective /goal", false);
+if (trailing.active) throw new Error("postfix command opened the picker");
+
+const path = parseSlashInput("Review /a0/usr/projects/example", false);
+if (path.active) throw new Error("path opened the picker");
+
+const resolvable = parseSlashInput("objective /goal");
+if (!resolvable.active || resolvable.query !== "goal") throw new Error("postfix resolution broke");
+
+const reference = parseReferenceInput("Compare @src/app", 16);
+if (!reference.active || reference.query !== "src/app" || reference.start !== 8 || reference.end !== 16) throw new Error("reference token not found");
+
+const middle = parseReferenceInput("Use @src/app then", 12);
+if (!middle.active || middle.query !== "src/app") throw new Error("caret-local reference not found");
+
+if (parseReferenceInput("mail@example.test").active) throw new Error("email opened reference picker");
+if (parseReferenceInput("Use @[./src/app.py]").active) throw new Error("completed reference reopened picker");
+if (fileQueryDirectory("../secret") !== null) throw new Error("parent traversal accepted");
+if (fileQueryDirectory("mcp/server") !== null) throw new Error("MCP reference opened file browser");
+
+const mcp = getMcpReferences({{
+  tools: {{
+    effective_policy: {{ mode: "custom", mcp_default: "block", allowed: ["mcp:allowed:read"], blocked: ["mcp:blocked:read"] }},
+    catalog: [
+      {{ id: "mcp:allowed:read", available: true }},
+      {{ id: "mcp:blocked:read", available: true }},
+      {{ id: "mcp:default-blocked:read", available: true }},
+      {{ id: "mcp:missing:read", available: false }},
+    ],
+  }},
+}});
+if (JSON.stringify(mcp) !== JSON.stringify([{{ name: "allowed", toolCount: 1 }}])) throw new Error("MCP policy scope leaked");
+"""
+    subprocess.run(["node", "-e", script], check=True, text=True)
+
+
+def test_composer_reference_picker_uses_plain_reference_tokens() -> None:
+    plugin_root = Path(__file__).resolve().parents[1]
+    store = (plugin_root / "webui" / "commands-slash-store.js").read_text(encoding="utf-8")
+    menu = (
+        plugin_root / "extensions" / "webui" / "chat-input-box-start" / "commands-menu.html"
+    ).read_text(encoding="utf-8")
+
+    assert "@[agent/${key}]" in store
+    assert "@[skill/${name}]" in store
+    assert "value: `@[${displayPath}]`" in store
+    assert 'icon: isDirectory ? "folder" : "draft"' in store
+    assert 'icon: "person"' in store
+    assert 'icon: "auto_awesome"' in store
+    assert "skills.filter((skill) => !skill?.hidden)" in store
+    assert 'icon: "hub"' in store
+    assert "@[mcp/${name}]" in store
+    assert 'const AGENT_EDITOR_API_PATH = "/plugins/_agent_editor/agent_editor"' in store
+    assert 'action: "list", context_id: contextId' in store
+    assert 'action: "load",' in store
+    assert "getMcpReferences(mcpResult?.state)" in store
+    assert 'mcp_servers_status' not in store
+    assert "composer-reference" in store
+    assert "node.dataset.label = reference.label" in store
+    assert 'callJsonApi("/chat_files_path_get"' in store
+    assert 'callJsonApi("/agents"' not in store
+    assert "filteredItems" in menu
+    assert "#chat-input .composer-reference" in menu
+    assert "content: attr(data-label)" in menu
+    assert "color: var(--color-highlight)" in menu
+    assert "color: var(--color-text)" in menu
+    assert "composer-reference.is-mcp" in menu
+    assert "background: transparent" in menu
 
 
 @pytest.fixture
@@ -264,6 +351,152 @@ def test_models_command_always_opens_modal():
     assert result == {
         "text": "",
         "effects": [{"type": "open_plugin_config", "plugin": "_model_config"}],
+    }
+
+
+def test_profile_command_opens_agent_manager() -> None:
+    result = connector_commands.run(
+        {
+            "invocation": {"command_name": "profile", "raw_arguments": ""},
+            "context": {"context_id": ""},
+        }
+    )
+
+    assert result == {
+        "text": "",
+        "effects": [{"type": "open_agent_editor", "view": "manage"}],
+    }
+
+
+def test_permissions_command_edits_the_current_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = SimpleNamespace(config=SimpleNamespace(profile="developer"))
+    monkeypatch.setattr(connector_commands, "_context", lambda _context_id: context)
+    result = connector_commands.run(
+        {
+            "invocation": {"command_name": "permissions", "raw_arguments": ""},
+            "context": {"context_id": "ctx-1"},
+        }
+    )
+
+    assert result == {
+        "text": "",
+        "effects": [
+            {
+                "type": "open_agent_editor",
+                "view": "edit",
+                "profile_id": "developer",
+            }
+        ],
+    }
+
+
+def test_permissions_command_refuses_the_internal_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = SimpleNamespace(config=SimpleNamespace(profile="default"))
+    monkeypatch.setattr(connector_commands, "_context", lambda _context_id: context)
+
+    result = connector_commands.run(
+        {
+            "invocation": {"command_name": "permissions", "raw_arguments": ""},
+            "context": {"context_id": "ctx-1"},
+        }
+    )
+
+    assert result["effects"] == [
+        {
+            "type": "toast",
+            "message": "The Default utility profile has no editable permissions.",
+            "level": "error",
+        }
+    ]
+
+
+def test_profile_command_quick_creates_with_the_agent_editor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from plugins._agent_editor.helpers import editor
+
+    context = SimpleNamespace()
+    saved: list[tuple[str, str, object]] = []
+    monkeypatch.setattr(connector_commands, "_context", lambda _context_id: context)
+    monkeypatch.setattr(connector_commands.projects, "get_context_project_name", lambda _context: "")
+    monkeypatch.setattr(connector_commands.subagents, "get_available_agents_dict", lambda _project: {})
+    monkeypatch.setattr(
+        editor,
+        "save_easy_profile",
+        lambda title, instructions, profile_context: (
+            saved.append((title, instructions, profile_context)) or "source-scout",
+            {},
+        ),
+    )
+
+    result = connector_commands.run(
+        {
+            "invocation": {
+                "command_name": "profile",
+                "raw_arguments": '"Source Scout" "Verify every claim"',
+                "arguments": {
+                    "positional": ["Source Scout", "Verify every claim"],
+                },
+            },
+            "context": {"context_id": "ctx-1"},
+        }
+    )
+
+    assert saved == [("Source Scout", "Verify every claim", context)]
+    assert result["effects"] == [
+        {"type": "toast", "message": "Created agent Source Scout.", "level": "success"},
+        {
+            "type": "test_agent_profile",
+            "profile_id": "source-scout",
+            "project_name": "",
+        },
+    ]
+
+
+def test_stop_command_uses_the_composer_stop_operation(monkeypatch):
+    class Log:
+        def __init__(self):
+            self.progress = []
+            self.entries = []
+
+        def set_progress(self, value, *, active):
+            self.progress.append((value, active))
+
+        def log(self, **kwargs):
+            self.entries.append(kwargs)
+
+    context = SimpleNamespace(
+        id="stop-command-context",
+        paused=True,
+        log=Log(),
+        is_running=lambda: True,
+        kill_process=lambda: setattr(context, "killed", True),
+        killed=False,
+    )
+    monkeypatch.setattr(connector_commands, "_context", lambda _context_id: context)
+
+    result = connector_commands.run(
+        {
+            "invocation": {"command_name": "stop", "raw_arguments": ""},
+            "context": {"context_id": context.id},
+        }
+    )
+
+    assert context.killed is True
+    assert context.paused is False
+    assert context.log.progress == [("", False)]
+    assert context.log.entries == [
+        {"type": "info", "content": "Agent process stopped.", "finished": True}
+    ]
+    assert result == {
+        "text": "",
+        "effects": [
+            {"type": "toast", "message": "Agent process stopped.", "level": "success"}
+        ],
     }
 
 

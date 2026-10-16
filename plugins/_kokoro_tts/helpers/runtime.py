@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import math
+import re
 import warnings
 from typing import Any
 
@@ -15,7 +17,7 @@ from helpers.notification import (
     NotificationType,
 )
 from helpers.print_style import PrintStyle
-from plugins._kokoro_tts.helpers import migration
+from plugins._kokoro_tts.helpers import migration, paradee
 
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -24,16 +26,18 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 PLUGIN_NAME = "_kokoro_tts"
 DEFAULT_CONFIG = {
-    "voice": "am_puck,am_onyx",
+    "voice": "paradee",
+    "voice_weights": {},
     "speed": 1.1,
 }
+VOICE_ID_PATTERN = re.compile(r"^[a-z]{2}_[a-z0-9_]+$")
 
 _pipeline = None
 is_updating_model = False
 
 
 def normalize_config(config: dict[str, Any] | None) -> dict[str, Any]:
-    normalized = dict(DEFAULT_CONFIG)
+    normalized = {**DEFAULT_CONFIG, "voice_weights": {}}
     if not isinstance(config, dict):
         return normalized
 
@@ -41,9 +45,31 @@ def normalize_config(config: dict[str, Any] | None) -> dict[str, Any]:
     if voice:
         normalized["voice"] = voice
 
+    weights = config.get("voice_weights")
+    if isinstance(weights, dict):
+        for raw_voice, raw_weight in weights.items():
+            voice_id = str(raw_voice or "").strip()
+            if not VOICE_ID_PATTERN.fullmatch(voice_id):
+                continue
+            try:
+                weight = float(raw_weight)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(weight) and weight > 0:
+                normalized["voice_weights"][voice_id] = weight
+
+    if normalized["voice_weights"]:
+        normalized["voice"] = ",".join(normalized["voice_weights"])
+    else:
+        voices = [part.strip() for part in normalized["voice"].split(",")]
+        if any(voice.lower() == "paradee" for voice in voices):
+            normalized["voice"] = ",".join(
+                voice for voice in voices if voice and voice.lower() != "paradee"
+            ) or "paradee"
+
     try:
         speed = float(config.get("speed", normalized["speed"]))
-        if speed > 0:
+        if math.isfinite(speed) and speed > 0:
             normalized["speed"] = speed
     except (TypeError, ValueError):
         pass
@@ -64,6 +90,8 @@ def is_globally_enabled() -> bool:
 
 
 async def preload(config: dict[str, Any] | None = None):
+    if normalize_config(config if config is not None else get_config())["voice"] == "paradee":
+        return await asyncio.to_thread(paradee.preload)
     return await _preload()
 
 
@@ -98,11 +126,15 @@ async def _preload():
         is_updating_model = False
 
 
-async def is_downloading() -> bool:
+async def is_downloading(config: dict[str, Any] | None = None) -> bool:
+    if normalize_config(config if config is not None else get_config())["voice"] == "paradee":
+        return paradee.model_status()["loading"]
     return is_updating_model
 
 
-async def is_downloaded() -> bool:
+async def is_downloaded(config: dict[str, Any] | None = None) -> bool:
+    if normalize_config(config if config is not None else get_config())["voice"] == "paradee":
+        return paradee.model_status()["ready"]
     return _pipeline is not None
 
 
@@ -110,26 +142,48 @@ async def synthesize_sentences(
     sentences: list[str], config: dict[str, Any] | None = None
 ) -> str:
     cfg = normalize_config(config or get_config())
+    if cfg["voice"] == "paradee" and not cfg["voice_weights"]:
+        return await asyncio.to_thread(paradee.synthesize, "\n".join(sentences), float(cfg["speed"]))
     return await _synthesize_sentences(
         sentences,
         voice=str(cfg["voice"]),
+        voice_weights=dict(cfg["voice_weights"]),
         speed=float(cfg["speed"]),
     )
 
 
+def _resolve_voice(
+    pipeline: Any, voice: str, voice_weights: dict[str, float]
+) -> Any:
+    if not voice_weights:
+        return voice
+
+    total = sum(voice_weights.values())
+    if not math.isfinite(total) or total <= 0:
+        return voice
+    blend = None
+    for voice_id, weight in voice_weights.items():
+        weighted_pack = pipeline.load_single_voice(voice_id) * (weight / total)
+        blend = weighted_pack if blend is None else blend + weighted_pack
+    return blend
+
+
 async def _synthesize_sentences(
-    sentences: list[str], *, voice: str, speed: float
+    sentences: list[str], *, voice: str, voice_weights: dict[str, float], speed: float
 ) -> str:
     await _preload()
 
     combined_audio: list[float] = []
+    resolved_voice = _resolve_voice(_pipeline, voice, voice_weights)
 
     try:
         for sentence in sentences:
             if not sentence.strip():
                 continue
 
-            segments = _pipeline(sentence.strip(), voice=voice, speed=speed)  # type: ignore[misc]
+            segments = _pipeline(  # type: ignore[misc]
+                sentence.strip(), voice=resolved_voice, speed=speed
+            )
             for segment in list(segments):
                 audio_tensor = segment.audio
                 audio_numpy = audio_tensor.detach().cpu().numpy()  # type: ignore[union-attr]

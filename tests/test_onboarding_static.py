@@ -80,6 +80,20 @@ def test_onboarding_contains_unified_provider_step():
     assert "localGuidance()" in html + store
 
 
+def test_onboarding_closes_before_opening_advanced_model_settings():
+    store = (PROJECT_ROOT / "plugins/_onboarding/webui/onboarding-store.js").read_text(
+        encoding="utf-8"
+    )
+    method = store.split("  async openAdvancedSettings() {", 1)[1].split("\n  },", 1)[0]
+
+    close_call = "await window.closeModal?.();"
+    open_call = "await modelConfigStore.openPresetEditor("
+
+    assert close_call in method
+    assert open_call in method
+    assert method.index(close_call) < method.index(open_call)
+
+
 def test_onboarding_provider_grid_names_are_present_in_metadata():
     provider_yaml = (PROJECT_ROOT / "conf/model_providers.yaml").read_text(encoding="utf-8")
     provider_ui = (PROJECT_ROOT / "plugins/_onboarding/webui/onboarding-providers.js").read_text(encoding="utf-8")
@@ -105,6 +119,9 @@ def test_onboarding_provider_grid_names_are_present_in_metadata():
     assert 'default_api_base: "http://host.docker.internal:8000/v1"' in provider_ui
     assert 'logo: "/plugins/_onboarding/webui/assets/provider-logos/vllm.svg"' in provider_ui
     assert 'docs_url: "https://docs.vllm.ai/en/stable/serving/online_serving/"' in provider_ui
+    assert 'logo: "/plugins/_onboarding/webui/assets/provider-logos/cerebras.svg"' in provider_ui
+    assert 'docs_url: "https://inference-docs.cerebras.ai/quickstart"' in provider_ui
+    assert 'default_chat_model: "gpt-oss-120b"' in provider_ui
     assert 'docs_url: ""' in provider_ui
     assert "api_key_mode: none" in model_metadata
     assert "api_key_mode: optional" in model_metadata
@@ -138,7 +155,7 @@ def test_onboarding_provider_grid_names_are_present_in_metadata():
     ]:
         assert name in provider_yaml + provider_ui
 
-    for name in ["Ollama Cloud", "AWS Bedrock", "Groq"]:
+    for name in ["Ollama Cloud", "AWS Bedrock", "Groq", "Cerebras"]:
         assert name in provider_yaml + provider_ui
 
     for forbidden in [
@@ -163,6 +180,7 @@ def test_onboarding_provider_grid_names_are_present_in_metadata():
         "groq.svg",
         "sambanova.png",
         "cometapi.ico",
+        "cerebras.svg",
         "github-copilot.svg",
         "llama-cpp.svg",
         "zai-logo.svg",
@@ -172,17 +190,18 @@ def test_onboarding_provider_grid_names_are_present_in_metadata():
         assert logo in provider_ui
 
     assert (PROJECT_ROOT / "plugins/_onboarding/webui/assets/provider-logos/llama-cpp.svg").exists()
+    assert (PROJECT_ROOT / "plugins/_onboarding/webui/assets/provider-logos/cerebras.svg").exists()
     assert (PROJECT_ROOT / "plugins/_onboarding/webui/assets/provider-logos/omlx.svg").exists()
     assert (PROJECT_ROOT / "plugins/_onboarding/webui/assets/provider-logos/vllm.svg").exists()
 
 
-def test_nebius_provider_config_uses_openai_compatible_token_factory_endpoint():
+def test_nebius_provider_config_uses_native_route_with_token_factory_endpoint():
     provider_path = PROJECT_ROOT / "conf/model_providers.yaml"
     provider_config = yaml.safe_load(provider_path.read_text(encoding="utf-8"))
     nebius = provider_config["chat"]["nebius"]
 
     assert nebius["name"] == "Nebius Token Factory"
-    assert nebius["litellm_provider"] == "openai"
+    assert nebius["litellm_provider"] == "nebius"
     assert nebius["kwargs"]["api_base"] == "https://api.tokenfactory.nebius.com/v1"
     assert nebius["models_list"]["endpoint_url"] == "/models"
     assert "api_key_mode" not in nebius

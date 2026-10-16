@@ -46,7 +46,7 @@ def test_oauth_settings_exposes_provider_specific_controls_and_generic_copy():
 
     assert "Check models" not in config_html
     assert "card.connected ? 'Connected' : 'Available'" not in config_html
-    assert '<span class="oauth-account-state connected" x-show="card.connected">Connected</span>' in config_html
+    assert '<span class="oauth-account-state connected" x-show="card.connected && !card.reconnect_required">Connected</span>' in config_html
     assert "Select account-backed models used by the Main model and Utility model slots." not in config_html
     assert "Primary model for chat, reasoning, and browser tasks." not in config_html + store_js
     assert "Background model for summaries, memory, and prompt preparation." not in config_html + store_js
@@ -61,6 +61,10 @@ def test_oauth_settings_exposes_provider_specific_controls_and_generic_copy():
     assert "supports_quota_project" in config_html + store_js
     assert "OAuth client ID" in config_html
     assert "quota_project_id" in config_html + store_js
+    assert "Codex response defaults" in config_html
+    assert "$store.oauthConfig.codex().reasoning_effort" in config_html
+    assert "$store.oauthConfig.codex().reasoning_summary" in config_html
+    assert "$store.oauthConfig.codex().text_verbosity" in config_html
     assert "providerDetailOpen(card.provider_id)" in config_html + store_js
     assert "providerDevice(card.provider_id)?.user_code" in config_html
     assert "submitManualCallback(card.provider_id)" in config_html
